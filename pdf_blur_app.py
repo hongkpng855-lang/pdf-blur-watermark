@@ -63,69 +63,54 @@ def apply_blur(page_img, blur_regions, radius=25):
 
 
 def apply_watermark(page_img, wm_config):
-    """Apply watermark text to the page image."""
+    """Apply watermark text tiled diagonally at max size."""
     if not wm_config or not wm_config.get('text'):
         return page_img
 
     img = page_img.copy()
     txt = wm_config['text']
-    opacity = wm_config.get('opacity', 30) / 100.0  # 0-100 → 0-1
-    size = wm_config.get('size', 48)
-    angle = wm_config.get('angle', -30)
-    pos = wm_config.get('position', 'center')  # center, top-left, top-right, bottom-left, bottom-right, tile
+    opacity = wm_config.get('opacity', 30) / 100.0
     color = wm_config.get('color', '#888888')
 
     # Parse color
     color = color.lstrip('#')
-    r, g, b = int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16)
+    r, g, b = int(color[0:2], 16) if len(color) >= 2 else 0, \
+              int(color[2:4], 16) if len(color) >= 4 else 0, \
+              int(color[4:6], 16) if len(color) >= 6 else 0
 
-    # Create a transparent overlay
     overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    # Load font
-    font_size = max(12, min(size, img.width // 4))
+    # Max font size that fits the page width
+    font_size = max(48, img.width // 3)
     try:
         font = ImageFont.truetype(FONT_PATH, font_size) if FONT_PATH else ImageFont.load_default()
     except:
         font = ImageFont.load_default()
 
-    if pos == 'tile':
-        # Tiled watermark
-        step_x = int(font_size * 4.5)
-        step_y = int(font_size * 3)
-        for ty in range(0, img.height + step_y, step_y):
-            for tx in range(0, img.width + step_x, step_x):
-                # Rotate text
-                txt_overlay = Image.new('RGBA', (step_x * 2, step_y), (0, 0, 0, 0))
-                td = ImageDraw.Draw(txt_overlay)
-                bbox = td.textbbox((0, 0), txt, font=font)
-                tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-                td.text((0, 0), txt, font=font, fill=(r, g, b, int(255 * opacity)))
-                rotated = txt_overlay.rotate(angle, expand=True, center=(step_x, step_y // 2))
-                overlay.paste(rotated, (tx, ty), rotated)
-    else:
-        # Single position
+    bbox = draw.textbbox((0, 0), txt, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    if tw < 10:
+        font_size = img.width // 2
+        try:
+            font = ImageFont.truetype(FONT_PATH, font_size) if FONT_PATH else ImageFont.load_default()
+        except:
+            font = ImageFont.load_default()
         bbox = draw.textbbox((0, 0), txt, font=font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        pad = 40
 
-        if pos == 'top-left':
-            px, py = pad, pad + th
-        elif pos == 'top-right':
-            px, py = img.width - tw - pad, pad + th
-        elif pos == 'bottom-left':
-            px, py = pad, img.height - pad
-        elif pos == 'bottom-right':
-            px, py = img.width - tw - pad, img.height - pad
-        else:  # center
-            px, py = (img.width - tw) // 2, (img.height - th) // 2
+    # Tiled diagonally (-30 deg) across the whole page
+    angle = -30
+    step_x = int(tw * 1.8)
+    step_y = int(th * 2.5)
 
-        txt_overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-        td = ImageDraw.Draw(txt_overlay)
-        td.text((px, py - th), txt, font=font, fill=(r, g, b, int(255 * opacity)))
-        rotated = txt_overlay.rotate(angle, expand=False, center=(img.width // 2, img.height // 2))
-        overlay.paste(rotated, (0, 0), rotated)
+    for ty in range(-step_y, img.height + step_y, step_y):
+        for tx in range(-step_x, img.width + step_x, step_x):
+            txt_overlay = Image.new('RGBA', (step_x * 2, step_y), (0, 0, 0, 0))
+            td = ImageDraw.Draw(txt_overlay)
+            td.text((0, 0), txt, font=font, fill=(r, g, b, int(255 * opacity)))
+            rotated = txt_overlay.rotate(angle, expand=True, center=(step_x, step_y // 2))
+            overlay.paste(rotated, (tx, ty), rotated)
 
     return Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
 
@@ -291,37 +276,19 @@ function wmTemplate(idx) {
       '<span onclick="removeWatermark('+idx+')" style="color:#fd79a8;cursor:pointer;font-size:13px">✖</span>'+
     '</div>'+
     '<div class="wm-field"><label>Text</label><input type="text" class="wm-text" value="CONFIDENTIAL"></div>'+
-    '<div class="wm-row">'+
-      '<div class="wm-field"><label>Position</label><select class="wm-pos">'+
-        '<option value="center">Center</option><option value="tile">Tiled</option>'+
-        '<option value="top-left">Top Left</option><option value="top-right">Top Right</option>'+
-        '<option value="bottom-left">Bottom Left</option><option value="bottom-right">Bottom Right</option>'+
-      '</select></div>'+
-      '<div class="wm-field"><label>Angle</label><select class="wm-angle">'+
-        '<option value="0">0°</option><option value="-30" selected>-30°</option>'+
-        '<option value="-45">-45°</option><option value="-60">-60°</option>'+
-        '<option value="30">30°</option><option value="45">45°</option><option value="60">60°</option>'+
-      '</select></div>'+
-    '</div>'+
-    '<div class="wm-row">'+
-      '<div class="wm-field"><label>Font Size</label><select class="wm-size">'+
-        '<option value="24">Small</option><option value="48" selected>Medium</option>'+
-        '<option value="72">Large</option><option value="96">X-Large</option>'+
-      '</select></div>'+
-      '<div class="wm-field"><label>Opacity</label><select class="wm-opacity">'+
+    '<div style="display:flex;gap:6px">'+
+      '<div class="wm-field" style="flex:1"><label>Opacity</label><select class="wm-opacity">'+
         '<option value="10">10%</option><option value="20">20%</option><option value="30" selected>30%</option>'+
         '<option value="50">50%</option><option value="70">70%</option>'+
       '</select></div>'+
-    '</div>'+
-    '<div class="wm-field"><label>Color</label>'+
-      '<div style="display:flex;gap:4px;flex-wrap:wrap">'+
-        '<span onclick="setWmIdx('+idx+',\'#888888\')" style="display:inline-block;width:20px;height:20px;border-radius:3px;background:#888;cursor:pointer;border:2px solid transparent"></span>'+
-        '<span onclick="setWmIdx('+idx+',\'#ff0000\')" style="display:inline-block;width:20px;height:20px;border-radius:3px;background:#f00;cursor:pointer;border:2px solid transparent"></span>'+
-        '<span onclick="setWmIdx('+idx+',\'#0000ff\')" style="display:inline-block;width:20px;height:20px;border-radius:3px;background:#00f;cursor:pointer;border:2px solid transparent"></span>'+
-        '<span onclick="setWmIdx('+idx+',\'#00aa00\')" style="display:inline-block;width:20px;height:20px;border-radius:3px;background:#0a0;cursor:pointer;border:2px solid transparent"></span>'+
-        '<span onclick="setWmIdx('+idx+',\'#000000\')" style="display:inline-block;width:20px;height:20px;border-radius:3px;background:#000;cursor:pointer;border:2px solid #555"></span>'+
-        '<span onclick="setWmIdx('+idx+',\'#ffffff\')" style="display:inline-block;width:20px;height:20px;border-radius:3px;background:#fff;cursor:pointer;border:2px solid #555"></span>'+
-        '<input type="color" class="wm-color" value="#888888" style="width:24px;height:20px;padding:0;border:1px solid #2a2a3a;background:#1c1c2a;cursor:pointer;border-radius:3px">'+
+      '<div class="wm-field" style="flex:1"><label>Color</label>'+
+        '<div style="display:flex;gap:2px;flex-wrap:wrap">'+
+          '<span onclick="setWmIdx('+idx+',\'#888\')" style="display:inline-block;width:18px;height:18px;border-radius:3px;background:#888;cursor:pointer;border:2px solid transparent"></span>'+
+          '<span onclick="setWmIdx('+idx+',\'#f00\')" style="display:inline-block;width:18px;height:18px;border-radius:3px;background:#f00;cursor:pointer;border:2px solid transparent"></span>'+
+          '<span onclick="setWmIdx('+idx+',\'#00f\')" style="display:inline-block;width:18px;height:18px;border-radius:3px;background:#00f;cursor:pointer;border:2px solid transparent"></span>'+
+          '<span onclick="setWmIdx('+idx+',\'#0a0\')" style="display:inline-block;width:18px;height:18px;border-radius:3px;background:#0a0;cursor:pointer;border:2px solid transparent"></span>'+
+          '<input type="color" class="wm-color" value="#888" style="width:20px;height:18px;padding:0;border:1px solid #2a2a3a;background:#1c1c2a;cursor:pointer;border-radius:3px">'+
+        '</div>'+
       '</div>'+
     '</div>'+
   '</div>';
@@ -473,9 +440,6 @@ async function processPDF() {
       if (!text) return;
       wmList.push({
         text: text,
-        position: el.querySelector('.wm-pos').value,
-        angle: parseInt(el.querySelector('.wm-angle').value),
-        size: parseInt(el.querySelector('.wm-size').value),
         opacity: parseInt(el.querySelector('.wm-opacity').value),
         color: el.querySelector('.wm-color').value,
       });
