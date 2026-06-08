@@ -71,7 +71,8 @@ def apply_watermark(page_img, wm_config):
     img = page_img.copy()
     txt = wm_config['text']
     opacity = wm_config.get('opacity', 30) / 100.0
-    user_size = wm_config.get('size', 48)
+    user_size = wm_config.get('size', 80)
+    spacing = wm_config.get('spacing', 2.0)
     color = wm_config.get('color', '#888888')
 
     # Parse color
@@ -102,8 +103,8 @@ def apply_watermark(page_img, wm_config):
 
     # Tiled diagonally (-30 deg) across the whole page
     angle = -30
-    step_x = int(tw * 1.8)
-    step_y = int(th * 2.5)
+    step_x = int(tw * spacing * 0.9)
+    step_y = int(th * spacing * 1.25)
 
     for ty in range(-step_y, img.height + step_y, step_y):
         for tx in range(-step_x, img.width + step_x, step_x):
@@ -259,6 +260,10 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
       <div class="wm-field">
         <label>Size: <span id="wmSizeVal" style="color:#6c5ce7">80</span></label>
         <input type="range" id="wmSize" min="20" max="200" value="80">
+      </div>
+      <div class="wm-field">
+        <label>Spacing: <span id="wmSpacingVal" style="color:#6c5ce7">2.0</span></label>
+        <input type="range" id="wmSpacing" min="0.5" max="5.0" step="0.1" value="2.0">
       </div>
       <div class="wm-row">
         <div class="wm-field">
@@ -423,6 +428,7 @@ async function processPDF() {
       wmList.push({
         text: text,
         size: parseInt(document.getElementById('wmSize').value),
+        spacing: parseFloat(document.getElementById('wmSpacing').value),
         opacity: parseInt(document.getElementById('wmOpacity').value),
         color: document.getElementById('wmColor').value,
       });
@@ -470,11 +476,16 @@ document.getElementById('blurIntensity').addEventListener('input', function() {
 document.getElementById('wmSize').addEventListener('input', function() {
   document.getElementById('wmSizeVal').textContent = this.value;
 });
+document.getElementById('wmSpacing').addEventListener('input', function() {
+  document.getElementById('wmSpacingVal').textContent = parseFloat(this.value).toFixed(1);
+});
 
 function clearWatermark() {
   document.getElementById('wmText').value = '';
   document.getElementById('wmSize').value = 80;
   document.getElementById('wmSizeVal').textContent = '80';
+  document.getElementById('wmSpacing').value = 2.0;
+  document.getElementById('wmSpacingVal').textContent = '2.0';
   document.getElementById('wmOpacity').value = '30';
   document.getElementById('wmColor').value = '#888';
 }
