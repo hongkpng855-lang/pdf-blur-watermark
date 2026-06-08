@@ -277,11 +277,9 @@ function wmTemplate(idx) {
     '</div>'+
     '<div class="wm-field"><label>Text</label><input type="text" class="wm-text" value="ESGov"></div>'+
     '<div style="display:flex;gap:6px">'+
-      '<div class="wm-field" style="flex:1"><label>Size</label><select class="wm-size">'+
-        '<option value="24">Small</option><option value="48" selected>Medium</option>'+
-        '<option value="72">Large</option><option value="96">X-Large</option>'+
-        '<option value="120">XXL</option><option value="160">Max</option>'+
-      '</select></div>'+
+      '<div class="wm-field" style="flex:1"><label>Size: <span class="size-val" style="color:#6c5ce7">80</span></label>'+
+        '<input type="range" class="wm-size" min="20" max="200" value="80">'+
+      '</div>'+
       '<div class="wm-field" style="flex:1"><label>Opacity</label><select class="wm-opacity">'+
         '<option value="10">10%</option><option value="20">20%</option><option value="30" selected>30%</option>'+
         '<option value="50">50%</option><option value="70">70%</option>'+
@@ -488,6 +486,13 @@ async function downloadPDF() {
 
 document.getElementById('blurIntensity').addEventListener('input', function() {
   document.getElementById('blurVal').textContent = this.value;
+});
+
+document.getElementById('wmList').addEventListener('input', function(e) {
+  if (e.target.classList.contains('wm-size')) {
+    const entry = e.target.closest('.wm-entry');
+    if (entry) entry.querySelector('.size-val').textContent = e.target.value;
+  }
 });
 
 function toast(msg, err) {
