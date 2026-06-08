@@ -27,6 +27,7 @@ def get_session_paths(sid):
         'pdf': os.path.join(sess_dir, 'input.pdf'),
         'originals': os.path.join(sess_dir, 'originals'),
         'processed_dir': os.path.join(sess_dir, 'processed'),
+        'meta': os.path.join(sess_dir, 'meta.json'),
     }
 
 
@@ -534,6 +535,11 @@ def upload():
             'dataUrl': f'data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}',
             'w': img.width, 'h': img.height
         })
+    # Save meta
+    with open(paths['meta'], 'w') as f:
+        import json as _json
+        _json.dump({'original_name': file.filename}, f)
+
     # Save originals
     originals_dir = paths['originals']
     if os.path.exists(originals_dir):
@@ -624,10 +630,24 @@ def download():
     if not images:
         return jsonify({'error': 'No images found'}), 404
 
+    # Get original filename for download name
+    orig_name = 'processed_output.pdf'
+    try:
+        import json as _json
+        with open(paths['meta']) as f:
+            meta = _json.load(f)
+            orig_name = meta.get('original_name', 'processed_output.pdf')
+            if orig_name.lower().endswith('.pdf'):
+                orig_name = orig_name[:-4] + '_Watermark.pdf'
+            else:
+                orig_name = orig_name + '_Watermark.pdf'
+    except:
+        pass
+
     output = os.path.join(paths['processed_dir'], 'output.pdf')
     images_to_pdf(images, output)
     return send_file(output, as_attachment=True,
-                     download_name='processed_output.pdf',
+                     download_name=orig_name,
                      mimetype='application/pdf')
 
 
