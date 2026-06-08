@@ -250,7 +250,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 
     <!-- Watermark -->
     <div class="section">
-      <h3>💧 Watermark</h3>
+      <h3>💧 Watermark <span onclick="clearWatermark()" style="color:#fd79a8;cursor:pointer;font-size:12px;float:right">✖ Clear</span></h3>
       <div class="wm-field">
         <label>Text</label>
         <input type="text" id="wmText" value="ESGov">
@@ -469,6 +469,14 @@ document.getElementById('blurIntensity').addEventListener('input', function() {
 document.getElementById('wmSize').addEventListener('input', function() {
   document.getElementById('wmSizeVal').textContent = this.value;
 });
+
+function clearWatermark() {
+  document.getElementById('wmText').value = '';
+  document.getElementById('wmSize').value = 80;
+  document.getElementById('wmSizeVal').textContent = '80';
+  document.getElementById('wmOpacity').value = '30';
+  document.getElementById('wmColor').value = '#888';
+}
 
 function toast(msg, err) {
   const el = document.getElementById('toast');
