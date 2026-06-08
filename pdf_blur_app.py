@@ -266,68 +266,8 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
     <!-- Watermark -->
     <div class="section">
       <h3>💧 Watermark</h3>
-      <div class="wm-field">
-        <label>Text</label>
-        <input type="text" id="wmText" placeholder="e.g. CONFIDENTIAL" value="CONFIDENTIAL">
-      </div>
-      <div class="wm-row">
-        <div class="wm-field">
-          <label>Position</label>
-          <select id="wmPos">
-            <option value="center">Center</option>
-            <option value="tile">Tiled</option>
-            <option value="top-left">Top Left</option>
-            <option value="top-right">Top Right</option>
-            <option value="bottom-left">Bottom Left</option>
-            <option value="bottom-right">Bottom Right</option>
-          </select>
-        </div>
-        <div class="wm-field">
-          <label>Angle</label>
-          <select id="wmAngle">
-            <option value="0">0°</option>
-            <option value="-30" selected>-30°</option>
-            <option value="-45">-45°</option>
-            <option value="-60">-60°</option>
-            <option value="30">30°</option>
-            <option value="45">45°</option>
-            <option value="60">60°</option>
-          </select>
-        </div>
-      </div>
-      <div class="wm-row">
-        <div class="wm-field">
-          <label>Font Size</label>
-          <select id="wmSize">
-            <option value="24">Small</option>
-            <option value="48" selected>Medium</option>
-            <option value="72">Large</option>
-            <option value="96">X-Large</option>
-          </select>
-        </div>
-        <div class="wm-field">
-          <label>Opacity</label>
-          <select id="wmOpacity">
-            <option value="10">10%</option>
-            <option value="20">20%</option>
-            <option value="30" selected>30%</option>
-            <option value="50">50%</option>
-            <option value="70">70%</option>
-          </select>
-        </div>
-      </div>
-      <div class="wm-field">
-        <label>Color</label>
-        <div style="display:flex;gap:4px;flex-wrap:wrap">
-          <span onclick="setWmColor('#888888')" style="display:inline-block;width:22px;height:22px;border-radius:3px;background:#888;cursor:pointer;border:2px solid transparent" data-c="#888888"></span>
-          <span onclick="setWmColor('#ff0000')" style="display:inline-block;width:22px;height:22px;border-radius:3px;background:#f00;cursor:pointer;border:2px solid transparent" data-c="#ff0000"></span>
-          <span onclick="setWmColor('#0000ff')" style="display:inline-block;width:22px;height:22px;border-radius:3px;background:#00f;cursor:pointer;border:2px solid transparent" data-c="#0000ff"></span>
-          <span onclick="setWmColor('#00aa00')" style="display:inline-block;width:22px;height:22px;border-radius:3px;background:#0a0;cursor:pointer;border:2px solid transparent" data-c="#00aa00"></span>
-          <span onclick="setWmColor('#000000')" style="display:inline-block;width:22px;height:22px;border-radius:3px;background:#000;cursor:pointer;border:2px solid #555" data-c="#000000"></span>
-          <span onclick="setWmColor('#ffffff')" style="display:inline-block;width:22px;height:22px;border-radius:3px;background:#fff;cursor:pointer;border:2px solid #555" data-c="#ffffff"></span>
-          <input type="color" id="wmColorPicker" value="#888888" style="width:26px;height:22px;padding:0;border:1px solid #2a2a3a;background:#1c1c2a;cursor:pointer;border-radius:3px">
-        </div>
-      </div>
+      <div id="wmList"></div>
+      <button onclick="addWatermark()" style="width:100%;padding:5px;margin-top:6px;border-radius:4px;border:1px dashed #2a2a3a;background:transparent;color:#6c5ce7;cursor:pointer;font-size:12px">+ Add Watermark</button>
     </div>
   </div>
 </div>
@@ -342,9 +282,69 @@ const overlayCanvas = document.getElementById('overlayCanvas');
 const overlayCtx = overlayCanvas.getContext('2d');
 let isDrawing = false, dx = 0, dy = 0;
 
-function setWmColor(c) {
-  document.getElementById('wmColorPicker').value = c;
+let wmCounter = 0;
+
+function wmTemplate(idx) {
+  return '<div class="wm-entry" data-idx="'+idx+'" style="border:1px solid #2a2a3a;border-radius:4px;padding:6px;margin-bottom:6px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'+
+      '<span style="font-size:11px;color:#6c5ce7;font-weight:bold">#'+(idx+1)+'</span>'+
+      '<span onclick="removeWatermark('+idx+')" style="color:#fd79a8;cursor:pointer;font-size:13px">✖</span>'+
+    '</div>'+
+    '<div class="wm-field"><label>Text</label><input type="text" class="wm-text" value="CONFIDENTIAL"></div>'+
+    '<div class="wm-row">'+
+      '<div class="wm-field"><label>Position</label><select class="wm-pos">'+
+        '<option value="center">Center</option><option value="tile">Tiled</option>'+
+        '<option value="top-left">Top Left</option><option value="top-right">Top Right</option>'+
+        '<option value="bottom-left">Bottom Left</option><option value="bottom-right">Bottom Right</option>'+
+      '</select></div>'+
+      '<div class="wm-field"><label>Angle</label><select class="wm-angle">'+
+        '<option value="0">0°</option><option value="-30" selected>-30°</option>'+
+        '<option value="-45">-45°</option><option value="-60">-60°</option>'+
+        '<option value="30">30°</option><option value="45">45°</option><option value="60">60°</option>'+
+      '</select></div>'+
+    '</div>'+
+    '<div class="wm-row">'+
+      '<div class="wm-field"><label>Font Size</label><select class="wm-size">'+
+        '<option value="24">Small</option><option value="48" selected>Medium</option>'+
+        '<option value="72">Large</option><option value="96">X-Large</option>'+
+      '</select></div>'+
+      '<div class="wm-field"><label>Opacity</label><select class="wm-opacity">'+
+        '<option value="10">10%</option><option value="20">20%</option><option value="30" selected>30%</option>'+
+        '<option value="50">50%</option><option value="70">70%</option>'+
+      '</select></div>'+
+    '</div>'+
+    '<div class="wm-field"><label>Color</label>'+
+      '<div style="display:flex;gap:4px;flex-wrap:wrap">'+
+        '<span onclick="setWmIdx('+idx+',\'#888888\')" style="display:inline-block;width:20px;height:20px;border-radius:3px;background:#888;cursor:pointer;border:2px solid transparent"></span>'+
+        '<span onclick="setWmIdx('+idx+',\'#ff0000\')" style="display:inline-block;width:20px;height:20px;border-radius:3px;background:#f00;cursor:pointer;border:2px solid transparent"></span>'+
+        '<span onclick="setWmIdx('+idx+',\'#0000ff\')" style="display:inline-block;width:20px;height:20px;border-radius:3px;background:#00f;cursor:pointer;border:2px solid transparent"></span>'+
+        '<span onclick="setWmIdx('+idx+',\'#00aa00\')" style="display:inline-block;width:20px;height:20px;border-radius:3px;background:#0a0;cursor:pointer;border:2px solid transparent"></span>'+
+        '<span onclick="setWmIdx('+idx+',\'#000000\')" style="display:inline-block;width:20px;height:20px;border-radius:3px;background:#000;cursor:pointer;border:2px solid #555"></span>'+
+        '<span onclick="setWmIdx('+idx+',\'#ffffff\')" style="display:inline-block;width:20px;height:20px;border-radius:3px;background:#fff;cursor:pointer;border:2px solid #555"></span>'+
+        '<input type="color" class="wm-color" value="#888888" style="width:24px;height:20px;padding:0;border:1px solid #2a2a3a;background:#1c1c2a;cursor:pointer;border-radius:3px">'+
+      '</div>'+
+    '</div>'+
+  '</div>';
 }
+
+function addWatermark() {
+  const el = document.getElementById('wmList');
+  el.insertAdjacentHTML('beforeend', wmTemplate(wmCounter));
+  wmCounter++;
+}
+
+function removeWatermark(idx) {
+  const el = document.querySelector('.wm-entry[data-idx="'+idx+'"]');
+  if (el) el.remove();
+}
+
+function setWmIdx(idx, color) {
+  const entry = document.querySelector('.wm-entry[data-idx="'+idx+'"]');
+  if (entry) entry.querySelector('.wm-color').value = color;
+}
+
+// Add first watermark by default
+addWatermark();
 
 document.getElementById('fileInput').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
@@ -467,21 +467,26 @@ async function processPDF() {
   btn.disabled = true; btn.textContent = '⏳ Processing...';
   try {
     const intensity = parseInt(document.getElementById('blurIntensity').value);
-    const wm = {
-      text: document.getElementById('wmText').value.trim(),
-      position: document.getElementById('wmPos').value,
-      angle: parseInt(document.getElementById('wmAngle').value),
-      size: parseInt(document.getElementById('wmSize').value),
-      opacity: parseInt(document.getElementById('wmOpacity').value),
-      color: document.getElementById('wmColorPicker').value,
-    };
+    const wmList = [];
+    document.querySelectorAll('.wm-entry').forEach(el => {
+      const text = el.querySelector('.wm-text').value.trim();
+      if (!text) return;
+      wmList.push({
+        text: text,
+        position: el.querySelector('.wm-pos').value,
+        angle: parseInt(el.querySelector('.wm-angle').value),
+        size: parseInt(el.querySelector('.wm-size').value),
+        opacity: parseInt(el.querySelector('.wm-opacity').value),
+        color: el.querySelector('.wm-color').value,
+      });
+    });
     const r = await fetch('/process', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         session_id: state.sessionId,
         regions: state.regions,
         radius: intensity,
-        watermark: wm
+        watermarks: wmList
       })
     });
     const d = await r.json();
@@ -513,11 +518,6 @@ async function downloadPDF() {
 
 document.getElementById('blurIntensity').addEventListener('input', function() {
   document.getElementById('blurVal').textContent = this.value;
-});
-
-// Color picker
-document.getElementById('wmColorPicker').addEventListener('input', function() {
-  document.querySelectorAll('[data-c]').forEach(el => el.style.borderColor = 'transparent');
 });
 
 function toast(msg, err) {
@@ -585,7 +585,7 @@ def process():
         return jsonify({'error': 'Session not found'}), 404
     radius = data.get('radius', 25)
     regions = data.get('regions', {})
-    wm = data.get('watermark', {})
+    watermarks = data.get('watermarks', [])
 
     # Load original images from processed dir
     processed_dir = paths['processed_dir']
@@ -607,8 +607,9 @@ def process():
         pr = regions.get(str(pi), [])
         if pr:
             img = apply_blur(img, pr, radius)
-        if wm.get('text'):
-            img = apply_watermark(img, wm)
+        for wm in watermarks:
+            if wm.get('text'):
+                img = apply_watermark(img, wm)
         img.save(os.path.join(processed_dir, f'{pi}.png'))
         processed_images.append(img)
 
