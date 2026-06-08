@@ -251,8 +251,36 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
     <!-- Watermark -->
     <div class="section">
       <h3>💧 Watermark</h3>
-      <div id="wmList"></div>
-      <button onclick="addWatermark()" style="width:100%;padding:5px;margin-top:6px;border-radius:4px;border:1px dashed #2a2a3a;background:transparent;color:#6c5ce7;cursor:pointer;font-size:12px">+ Add Watermark</button>
+      <div class="wm-field">
+        <label>Text</label>
+        <input type="text" id="wmText" value="ESGov">
+      </div>
+      <div class="wm-field">
+        <label>Size: <span id="wmSizeVal" style="color:#6c5ce7">80</span></label>
+        <input type="range" id="wmSize" min="20" max="200" value="80">
+      </div>
+      <div class="wm-row">
+        <div class="wm-field">
+          <label>Opacity</label>
+          <select id="wmOpacity">
+            <option value="10">10%</option>
+            <option value="20">20%</option>
+            <option value="30" selected>30%</option>
+            <option value="50">50%</option>
+            <option value="70">70%</option>
+          </select>
+        </div>
+        <div class="wm-field">
+          <label>Color</label>
+          <div style="display:flex;gap:2px;flex-wrap:wrap">
+            <span onclick="document.getElementById('wmColor').value='#888'" style="display:inline-block;width:18px;height:18px;border-radius:3px;background:#888;cursor:pointer;border:2px solid transparent"></span>
+            <span onclick="document.getElementById('wmColor').value='#f00'" style="display:inline-block;width:18px;height:18px;border-radius:3px;background:#f00;cursor:pointer;border:2px solid transparent"></span>
+            <span onclick="document.getElementById('wmColor').value='#00f'" style="display:inline-block;width:18px;height:18px;border-radius:3px;background:#00f;cursor:pointer;border:2px solid transparent"></span>
+            <span onclick="document.getElementById('wmColor').value='#0a0'" style="display:inline-block;width:18px;height:18px;border-radius:3px;background:#0a0;cursor:pointer;border:2px solid transparent"></span>
+            <input type="color" id="wmColor" value="#888" style="width:22px;height:18px;padding:0;border:1px solid #2a2a3a;background:#1c1c2a;cursor:pointer;border-radius:3px">
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -266,55 +294,6 @@ const baseCanvas = document.getElementById('baseCanvas');
 const overlayCanvas = document.getElementById('overlayCanvas');
 const overlayCtx = overlayCanvas.getContext('2d');
 let isDrawing = false, dx = 0, dy = 0;
-
-let wmCounter = 0;
-
-function wmTemplate(idx) {
-  return '<div class="wm-entry" data-idx="'+idx+'" style="border:1px solid #2a2a3a;border-radius:4px;padding:6px;margin-bottom:6px">'+
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'+
-      '<span style="font-size:11px;color:#6c5ce7;font-weight:bold">#'+(idx+1)+'</span>'+
-      '<span onclick="removeWatermark('+idx+')" style="color:#fd79a8;cursor:pointer;font-size:13px">✖</span>'+
-    '</div>'+
-    '<div class="wm-field"><label>Text</label><input type="text" class="wm-text" value="ESGov"></div>'+
-    '<div style="display:flex;gap:6px">'+
-      '<div class="wm-field" style="flex:1"><label>Size: <span class="size-val" style="color:#6c5ce7">80</span></label>'+
-        '<input type="range" class="wm-size" min="20" max="200" value="80">'+
-      '</div>'+
-      '<div class="wm-field" style="flex:1"><label>Opacity</label><select class="wm-opacity">'+
-        '<option value="10">10%</option><option value="20">20%</option><option value="30" selected>30%</option>'+
-        '<option value="50">50%</option><option value="70">70%</option>'+
-      '</select></div>'+
-      '<div class="wm-field" style="flex:1"><label>Color</label>'+
-        '<div style="display:flex;gap:2px;flex-wrap:wrap">'+
-          '<span onclick="setWmIdx('+idx+',\'#888\')" style="display:inline-block;width:18px;height:18px;border-radius:3px;background:#888;cursor:pointer;border:2px solid transparent"></span>'+
-          '<span onclick="setWmIdx('+idx+',\'#f00\')" style="display:inline-block;width:18px;height:18px;border-radius:3px;background:#f00;cursor:pointer;border:2px solid transparent"></span>'+
-          '<span onclick="setWmIdx('+idx+',\'#00f\')" style="display:inline-block;width:18px;height:18px;border-radius:3px;background:#00f;cursor:pointer;border:2px solid transparent"></span>'+
-          '<span onclick="setWmIdx('+idx+',\'#0a0\')" style="display:inline-block;width:18px;height:18px;border-radius:3px;background:#0a0;cursor:pointer;border:2px solid transparent"></span>'+
-          '<input type="color" class="wm-color" value="#888" style="width:20px;height:18px;padding:0;border:1px solid #2a2a3a;background:#1c1c2a;cursor:pointer;border-radius:3px">'+
-        '</div>'+
-      '</div>'+
-    '</div>'+
-  '</div>';
-}
-
-function addWatermark() {
-  const el = document.getElementById('wmList');
-  el.insertAdjacentHTML('beforeend', wmTemplate(wmCounter));
-  wmCounter++;
-}
-
-function removeWatermark(idx) {
-  const el = document.querySelector('.wm-entry[data-idx="'+idx+'"]');
-  if (el) el.remove();
-}
-
-function setWmIdx(idx, color) {
-  const entry = document.querySelector('.wm-entry[data-idx="'+idx+'"]');
-  if (entry) entry.querySelector('.wm-color').value = color;
-}
-
-// Add first watermark by default
-addWatermark();
 
 document.getElementById('fileInput').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
@@ -438,16 +417,15 @@ async function processPDF() {
   try {
     const intensity = parseInt(document.getElementById('blurIntensity').value);
     const wmList = [];
-    document.querySelectorAll('.wm-entry').forEach(el => {
-      const text = el.querySelector('.wm-text').value.trim();
-      if (!text) return;
+    const text = document.getElementById('wmText').value.trim();
+    if (text) {
       wmList.push({
         text: text,
-        size: parseInt(el.querySelector('.wm-size').value),
-        opacity: parseInt(el.querySelector('.wm-opacity').value),
-        color: el.querySelector('.wm-color').value,
+        size: parseInt(document.getElementById('wmSize').value),
+        opacity: parseInt(document.getElementById('wmOpacity').value),
+        color: document.getElementById('wmColor').value,
       });
-    });
+    }
     const r = await fetch('/process', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
@@ -488,11 +466,8 @@ document.getElementById('blurIntensity').addEventListener('input', function() {
   document.getElementById('blurVal').textContent = this.value;
 });
 
-document.getElementById('wmList').addEventListener('input', function(e) {
-  if (e.target.classList.contains('wm-size')) {
-    const entry = e.target.closest('.wm-entry');
-    if (entry) entry.querySelector('.size-val').textContent = e.target.value;
-  }
+document.getElementById('wmSize').addEventListener('input', function() {
+  document.getElementById('wmSizeVal').textContent = this.value;
 });
 
 function toast(msg, err) {
