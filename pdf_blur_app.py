@@ -70,6 +70,7 @@ def apply_watermark(page_img, wm_config):
     img = page_img.copy()
     txt = wm_config['text']
     opacity = wm_config.get('opacity', 30) / 100.0
+    user_size = wm_config.get('size', 48)
     color = wm_config.get('color', '#888888')
 
     # Parse color
@@ -81,8 +82,7 @@ def apply_watermark(page_img, wm_config):
     overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    # Max font size that fits the page width
-    font_size = max(48, img.width // 3)
+    font_size = min(user_size, img.width // 2)
     try:
         font = ImageFont.truetype(FONT_PATH, font_size) if FONT_PATH else ImageFont.load_default()
     except:
@@ -275,8 +275,13 @@ function wmTemplate(idx) {
       '<span style="font-size:11px;color:#6c5ce7;font-weight:bold">#'+(idx+1)+'</span>'+
       '<span onclick="removeWatermark('+idx+')" style="color:#fd79a8;cursor:pointer;font-size:13px">✖</span>'+
     '</div>'+
-    '<div class="wm-field"><label>Text</label><input type="text" class="wm-text" value="CONFIDENTIAL"></div>'+
+    '<div class="wm-field"><label>Text</label><input type="text" class="wm-text" value="ESGov"></div>'+
     '<div style="display:flex;gap:6px">'+
+      '<div class="wm-field" style="flex:1"><label>Size</label><select class="wm-size">'+
+        '<option value="24">Small</option><option value="48" selected>Medium</option>'+
+        '<option value="72">Large</option><option value="96">X-Large</option>'+
+        '<option value="120">XXL</option><option value="160">Max</option>'+
+      '</select></div>'+
       '<div class="wm-field" style="flex:1"><label>Opacity</label><select class="wm-opacity">'+
         '<option value="10">10%</option><option value="20">20%</option><option value="30" selected>30%</option>'+
         '<option value="50">50%</option><option value="70">70%</option>'+
@@ -440,6 +445,7 @@ async function processPDF() {
       if (!text) return;
       wmList.push({
         text: text,
+        size: parseInt(el.querySelector('.wm-size').value),
         opacity: parseInt(el.querySelector('.wm-opacity').value),
         color: el.querySelector('.wm-color').value,
       });
