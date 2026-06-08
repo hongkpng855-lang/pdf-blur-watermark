@@ -25,6 +25,7 @@ def get_session_paths(sid):
     os.makedirs(sess_dir, exist_ok=True)
     return {
         'pdf': os.path.join(sess_dir, 'input.pdf'),
+        'originals': os.path.join(sess_dir, 'originals'),
         'processed_dir': os.path.join(sess_dir, 'processed'),
     }
 
@@ -522,13 +523,21 @@ def upload():
             'dataUrl': f'data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}',
             'w': img.width, 'h': img.height
         })
-    # Remove existing processed images from previous runs
+    # Save originals
+    originals_dir = paths['originals']
+    if os.path.exists(originals_dir):
+        import shutil
+        shutil.rmtree(originals_dir)
+    os.makedirs(originals_dir, exist_ok=True)
+    for i, img in enumerate(images):
+        img.save(os.path.join(originals_dir, f'{i}.png'))
+
+    # Save initial preview copies to processed dir
     processed_dir = paths['processed_dir']
     if os.path.exists(processed_dir):
         import shutil
         shutil.rmtree(processed_dir)
     os.makedirs(processed_dir, exist_ok=True)
-    # Save originals as processed reference
     for i, img in enumerate(images):
         img.save(os.path.join(processed_dir, f'{i}.png'))
     return jsonify({'session_id': session_id, 'pages': pages})
@@ -545,20 +554,21 @@ def process():
     regions = data.get('regions', {})
     watermarks = data.get('watermarks', [])
 
-    # Load original images from processed dir
-    processed_dir = paths['processed_dir']
-    if not os.path.exists(processed_dir):
+    # Load original images (always from originals, so re-process doesn't stack)
+    originals_dir = paths['originals']
+    if not os.path.exists(originals_dir):
         return jsonify({'error': 'Session not found'}), 404
 
-    # Load images
     images = []
-    for f in sorted(os.listdir(processed_dir), key=lambda x: int(x.split('.')[0])):
+    for f in sorted(os.listdir(originals_dir), key=lambda x: int(x.split('.')[0])):
         if f.endswith('.png'):
-            images.append(Image.open(os.path.join(processed_dir, f)))
+            images.append(Image.open(os.path.join(originals_dir, f)))
 
     if not images:
         return jsonify({'error': 'No images found'}), 404
 
+    processed_dir = paths['processed_dir']
+    os.makedirs(processed_dir, exist_ok=True)
     processed_images = []
     for pi, img in enumerate(images):
         img = img.copy()
