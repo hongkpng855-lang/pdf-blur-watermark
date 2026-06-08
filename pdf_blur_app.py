@@ -18,7 +18,15 @@ FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 if not os.path.exists(FONT_PATH):
     FONT_PATH = None
 
-sessions = {}
+
+def get_session_paths(sid):
+    """Get file paths for a session, supporting multi-worker gunicorn."""
+    sess_dir = os.path.join(UPLOAD_FOLDER, sid)
+    os.makedirs(sess_dir, exist_ok=True)
+    return {
+        'pdf': os.path.join(sess_dir, 'input.pdf'),
+        'processed_dir': os.path.join(sess_dir, 'processed'),
+    }
 
 
 def pdf_to_images(pdf_path):
@@ -544,9 +552,9 @@ def upload():
     if not file.filename.lower().endswith('.pdf'):
         return jsonify({'error': 'Only PDF files accepted'}), 400
     session_id = uuid.uuid4().hex[:12]
-    pdf_path = os.path.join(UPLOAD_FOLDER, f'{session_id}.pdf')
-    file.save(pdf_path)
-    images = pdf_to_images(pdf_path)
+    paths = get_session_paths(session_id)
+    file.save(paths['pdf'])
+    images = pdf_to_images(paths['pdf'])
     pages = []
     for i, img in enumerate(images):
         buf = io.BytesIO()
@@ -556,12 +564,15 @@ def upload():
             'dataUrl': f'data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}',
             'w': img.width, 'h': img.height
         })
-    sessions[session_id] = {'pdf_path': pdf_path, 'images': images, 'processed': None}
-    # Clean old sessions
-    while len(sessions) > 20:
-        oldest = min(sessions, key=lambda k: sessions[k].get('_ts', 0))
-        del sessions[oldest]
-    sessions[session_id]['_ts'] = 0
+    # Remove existing processed images from previous runs
+    processed_dir = paths['processed_dir']
+    if os.path.exists(processed_dir):
+        import shutil
+        shutil.rmtree(processed_dir)
+    os.makedirs(processed_dir, exist_ok=True)
+    # Save originals as processed reference
+    for i, img in enumerate(images):
+        img.save(os.path.join(processed_dir, f'{i}.png'))
     return jsonify({'session_id': session_id, 'pages': pages})
 
 
@@ -569,32 +580,41 @@ def upload():
 def process():
     data = request.json
     sid = data.get('session_id')
-    if sid not in sessions:
+    paths = get_session_paths(sid)
+    if not os.path.exists(paths['pdf']):
         return jsonify({'error': 'Session not found'}), 404
-    sess = sessions[sid]
     radius = data.get('radius', 25)
     regions = data.get('regions', {})
     wm = data.get('watermark', {})
 
-    # Reset to originals if already processed
-    images = [img.copy() for img in sess['images']]
+    # Load original images from processed dir
+    processed_dir = paths['processed_dir']
+    if not os.path.exists(processed_dir):
+        return jsonify({'error': 'Session not found'}), 404
 
-    processed = []
+    # Load images
+    images = []
+    for f in sorted(os.listdir(processed_dir), key=lambda x: int(x.split('.')[0])):
+        if f.endswith('.png'):
+            images.append(Image.open(os.path.join(processed_dir, f)))
+
+    if not images:
+        return jsonify({'error': 'No images found'}), 404
+
+    processed_images = []
     for pi, img in enumerate(images):
-        # Apply blur
+        img = img.copy()
         pr = regions.get(str(pi), [])
         if pr:
             img = apply_blur(img, pr, radius)
-        # Apply watermark
         if wm.get('text'):
             img = apply_watermark(img, wm)
-        processed.append(img)
-
-    sess['processed'] = processed
+        img.save(os.path.join(processed_dir, f'{pi}.png'))
+        processed_images.append(img)
 
     # Return previews
     pages = []
-    for i, img in enumerate(processed):
+    for i, img in enumerate(processed_images):
         buf = io.BytesIO()
         img.save(buf, 'PNG')
         pages.append({
@@ -609,11 +629,22 @@ def process():
 def download():
     data = request.json
     sid = data.get('session_id')
-    if sid not in sessions:
+    paths = get_session_paths(sid)
+    if not os.path.exists(paths['pdf']):
         return jsonify({'error': 'Session not found'}), 404
-    sess = sessions[sid]
-    images = sess.get('processed') or sess['images']
-    output = os.path.join(UPLOAD_FOLDER, f'{sid}_out.pdf')
+
+    # Load images from processed dir (always the latest version)
+    processed_dir = paths['processed_dir']
+    images = []
+    if os.path.exists(processed_dir):
+        for f in sorted(os.listdir(processed_dir), key=lambda x: int(x.split('.')[0])):
+            if f.endswith('.png'):
+                images.append(Image.open(os.path.join(processed_dir, f)))
+
+    if not images:
+        return jsonify({'error': 'No images found'}), 404
+
+    output = os.path.join(paths['processed_dir'], 'output.pdf')
     images_to_pdf(images, output)
     return send_file(output, as_attachment=True,
                      download_name='processed_output.pdf',
