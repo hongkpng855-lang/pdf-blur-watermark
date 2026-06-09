@@ -677,78 +677,98 @@ def pdf_to_word(pdf_path, output_path):
     Falls back to image embedding for scanned/image-based PDFs."""
     import shutil
 
+    # Pre-check: if the PDF uses OCR/hidden fonts, it's a scanned document
+    # Skip directly to image fallback for better visual quality
+    pdf_check = fitz.open(pdf_path)
+    is_scanned = False
+    ocr_fonts = {'hiddenhorzocr', 'hiddenvertocr', 'ocra', 'ocrb'}
+    for page_num in range(min(len(pdf_check), 3)):  # Check first 3 pages
+        page = pdf_check.load_page(page_num)
+        text_dict = page.get_text("dict")
+        for block in text_dict.get("blocks", []):
+            if block.get("type") == 0:
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        font = span.get("font", "").lower().replace(" ", "")
+                        if any(ocr in font for ocr in ocr_fonts):
+                            is_scanned = True
+                            break
+                if is_scanned:
+                    break
+        if is_scanned:
+            break
+    pdf_check.close()
+
+    if is_scanned:
+        # Scanned PDF: render pages as images and embed in Word
+        doc = Document()
+        pdf = fitz.open(pdf_path)
+        for page_num in range(len(pdf)):
+            page = pdf.load_page(page_num)
+            rect = page.rect
+            if page_num > 0:
+                doc.add_section()
+            section = doc.sections[-1]
+            section.page_width = Pt(rect.width)
+            section.page_height = Pt(rect.height)
+            mat = fitz.Matrix(2.0, 2.0)
+            pix = page.get_pixmap(matrix=mat)
+            img_bytes = pix.tobytes("png")
+            img_path = os.path.join(os.path.dirname(output_path), f'_page{page_num}.png')
+            with open(img_path, 'wb') as f:
+                f.write(img_bytes)
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = p.add_run()
+            run.add_picture(img_path, width=Pt(rect.width))
+            os.remove(img_path)
+        pdf.close()
+        for p in doc.paragraphs[:]:
+            if not p.text.strip() and not p.runs:
+                try:
+                    p._element.getparent().remove(p._element)
+                except:
+                    pass
+        doc.save(output_path)
+        return
+
+    # Text-based PDF: use pdf2docx for proper conversion
     try:
-        # Primary: use pdf2docx for proper PDF→Word conversion
         from pdf2docx import Converter
         cv = Converter(pdf_path)
         cv.convert(output_path, start=0, end=None)
         cv.close()
     except Exception as e:
-        # If pdf2docx fails entirely (e.g. encrypted, damaged), fall through
-        pass
-
-    # Check if the output was produced and has content
-    docx_ok = False
-    if os.path.exists(output_path) and os.path.getsize(output_path) > 5000:
-        try:
-            test_doc = Document(output_path)
-            total_text = sum(len(p.text.strip()) for p in test_doc.paragraphs)
-            # Also check tables
-            for t in test_doc.tables:
-                for row in t.rows:
-                    for cell in row.cells:
-                        total_text += len(cell.text.strip())
-            if total_text > 20:
-                docx_ok = True
-                return  # pdf2docx produced good output
-        except:
-            pass
-
-    # Fallback: render PDF pages as images and embed in Word
-    # This preserves the visual layout for scanned/image-based PDFs
-    doc = Document()
-    pdf = fitz.open(pdf_path)
-
-    for page_num in range(len(pdf)):
-        page = pdf.load_page(page_num)
-        rect = page.rect
-
-        if page_num > 0:
-            doc.add_section()
-        section = doc.sections[-1]
-        section.page_width = Pt(rect.width)
-        section.page_height = Pt(rect.height)
-
-        # Render page as image
-        mat = fitz.Matrix(2.0, 2.0)  # 2x for quality
-        pix = page.get_pixmap(matrix=mat)
-        img_bytes = pix.tobytes("png")
-
-        # Save to temp file
-        img_path = os.path.join(os.path.dirname(output_path), f'_page{page_num}.png')
-        with open(img_path, 'wb') as f:
-            f.write(img_bytes)
-
-        # Add image to Word doc
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = p.add_run()
-        run.add_picture(img_path, width=Pt(rect.width))
-
-        # Clean up
-        os.remove(img_path)
-
-    pdf.close()
-
-    # Clean empty paragraphs
-    for p in doc.paragraphs[:]:
-        if not p.text.strip() and not p.runs:
-            try:
-                p._element.getparent().remove(p._element)
-            except:
-                pass
-
-    doc.save(output_path)
+        # Fallback to image embedding
+        doc = Document()
+        pdf = fitz.open(pdf_path)
+        for page_num in range(len(pdf)):
+            page = pdf.load_page(page_num)
+            rect = page.rect
+            if page_num > 0:
+                doc.add_section()
+            section = doc.sections[-1]
+            section.page_width = Pt(rect.width)
+            section.page_height = Pt(rect.height)
+            mat = fitz.Matrix(2.0, 2.0)
+            pix = page.get_pixmap(matrix=mat)
+            img_bytes = pix.tobytes("png")
+            img_path = os.path.join(os.path.dirname(output_path), f'_page{page_num}.png')
+            with open(img_path, 'wb') as f:
+                f.write(img_bytes)
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = p.add_run()
+            run.add_picture(img_path, width=Pt(rect.width))
+            os.remove(img_path)
+        pdf.close()
+        for p in doc.paragraphs[:]:
+            if not p.text.strip() and not p.runs:
+                try:
+                    p._element.getparent().remove(p._element)
+                except:
+                    pass
+        doc.save(output_path)
 
 
 # ══════════════════════════════════════════════════════════════
