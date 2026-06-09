@@ -218,6 +218,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
     <label for="fileInput">📁 Open PDF</label>
     <input type="file" id="fileInput" accept=".pdf">
     <button onclick="processPDF()" class="primary" id="processBtn" disabled>⚡ Process</button>
+    <button onclick="analyzePDF()" id="analyzeBtn" disabled>🔍 Analyze</button>
     <button onclick="downloadPDF()" id="downloadBtn" disabled>⬇ Download</button>
   </div>
 </div>
@@ -310,10 +311,11 @@ document.getElementById('fileInput').addEventListener('change', async e => {
     const d = await r.json();
     if (!r.ok) throw new Error(d.error);
     state.sessionId = d.session_id; state.pages = d.pages;
-    state.currentPage = 0; state.regions = {};
+    state.currentPage = 0; state.regions = {}; detectedBlocks = {};
     document.getElementById('emptyMsg').style.display = 'none';
     document.getElementById('sidebar').style.display = 'flex';
     document.getElementById('processBtn').disabled = false;
+    document.getElementById('analyzeBtn').disabled = false;
     renderThumbs(); renderPage(0);
     status(d.pages.length + ' pages loaded');
     toast('PDF loaded: ' + f.name);
@@ -332,7 +334,7 @@ function renderPage(idx) {
   overlayCanvas.width = page.w; overlayCanvas.height = page.h;
   overlayCanvas.style.width = (page.w*s)+'px'; overlayCanvas.style.height = (page.h*s)+'px';
   const img = new Image();
-  img.onload = () => { baseCanvas.getContext('2d').drawImage(img,0,0); redrawOverlay(); };
+  img.onload = () => { baseCanvas.getContext('2d').drawImage(img,0,0); redrawOverlay(); if (Object.keys(detectedBlocks).length) renderDetectedBlocks(); };
   img.src = page.dataUrl;
   status('Page '+(idx+1)+' of '+state.pages.length);
   updateRegionList();
@@ -453,6 +455,77 @@ async function processPDF() {
   finally { btn.disabled = false; btn.textContent = '⚡ Process'; }
 }
 
+// Analyze PDF — detect text blocks
+let detectedBlocks = {};
+
+async function analyzePDF() {
+  const btn = document.getElementById('analyzeBtn');
+  btn.disabled = true; btn.textContent = '⏳ Analyzing...';
+  try {
+    const r = await fetch('/analyze', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({session_id: state.sessionId})
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+    detectedBlocks = d.blocks || {};
+    renderDetectedBlocks();
+    const total = Object.values(detectedBlocks).reduce((a,b) => a + b.length, 0);
+    toast('🔍 ' + total + ' text blocks detected. Click a block to add to blur.');
+    status(total + ' text blocks found');
+  } catch(e) { toast('Error: '+e.message, true); }
+  finally { btn.disabled = false; btn.textContent = '🔍 Analyze'; }
+}
+
+function renderDetectedBlocks() {
+  const s = state.scale;
+  const ctx = overlayCanvas.getContext('2d');
+  const blocks = detectedBlocks[state.currentPage] || [];
+  // Redraw blur regions first
+  redrawOverlay();
+  // Then draw detected blocks
+  ctx.globalAlpha = 0.3;
+  blocks.forEach((b, i) => {
+    ctx.fillStyle = '#00ff88';
+    ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.strokeStyle = '#00ff88';
+    ctx.lineWidth = 1.5/s;
+    ctx.setLineDash([]);
+    ctx.strokeRect(b.x, b.y, b.w, b.h);
+    ctx.globalAlpha = 0.8;
+    ctx.fillStyle = '#00ff88';
+    ctx.font = Math.max(8, 10/s)+'px monospace';
+    ctx.fillText('📄'+(i+1), b.x+2/s, b.y+10/s);
+    ctx.globalAlpha = 0.3;
+  });
+  ctx.globalAlpha = 1.0;
+  // Make blocks clickable via overlay click
+}
+
+// Intercept overlay click for detected blocks
+overlayCanvas.addEventListener('click', e => {
+  if (isDrawing) return;
+  const r = overlayCanvas.getBoundingClientRect(), s = state.scale;
+  const cx = (e.clientX - r.left) / s, cy = (e.clientY - r.top) / s;
+  const blocks = detectedBlocks[state.currentPage] || [];
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i];
+    if (cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h) {
+      // Add to blur regions
+      const pi = state.currentPage;
+      if (!state.regions[pi]) state.regions[pi] = [];
+      state.regions[pi].push({id: Date.now(), x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h)});
+      // Remove from detected blocks so it doesn't get added again
+      blocks.splice(i, 1);
+      redrawOverlay();
+      renderDetectedBlocks();
+      updateRegionList();
+      toast('➕ Block added to blur');
+      break;
+    }
+  }
+});
+
 async function downloadPDF() {
   try {
     const r = await fetch('/download', {
@@ -558,6 +631,40 @@ def upload():
     for i, img in enumerate(images):
         img.save(os.path.join(processed_dir, f'{i}.png'))
     return jsonify({'session_id': session_id, 'pages': pages})
+
+
+@app.route('/analyze', methods=['POST'])
+def analyze():
+    """Detect text blocks in the PDF."""
+    data = request.json
+    sid = data.get('session_id')
+    paths = get_session_paths(sid)
+    if not os.path.exists(paths['pdf']):
+        return jsonify({'error': 'Session not found'}), 404
+
+    doc = fitz.open(paths['pdf'])
+    blocks_per_page = {}
+    for page_num in range(len(doc)):
+        page = doc.load_page(page_num)
+        # Get text blocks with coordinates
+        text_blocks = page.get_text("blocks")
+        blocks = []
+        for b in text_blocks:
+            if b[6] == 0:  # type 0 = text block
+                x0, y0, x1, y1 = b[0], b[1], b[2], b[3]
+                # Scale by 2x to match image coordinates
+                x0 *= 2; y0 *= 2; x1 *= 2; y1 *= 2
+                w = x1 - x0
+                h = y1 - y0
+                if w > 10 and h > 5:  # skip tiny fragments
+                    blocks.append({
+                        'x': round(x0), 'y': round(y0),
+                        'w': round(w), 'h': round(h),
+                        'text': b[4][:80]  # first 80 chars for reference
+                    })
+        blocks_per_page[str(page_num)] = blocks
+    doc.close()
+    return jsonify({'blocks': blocks_per_page})
 
 
 @app.route('/process', methods=['POST'])
