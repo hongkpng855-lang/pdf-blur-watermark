@@ -4,10 +4,13 @@ PDF Blur + Watermark Tool — Web App
 =====================================
 Upload a PDF, blur regions, add watermarks, download the result.
 """
-import os, uuid, io, base64, math
+import os, uuid, io, base64, math, json as _json
 from flask import Flask, request, jsonify, send_file
 from PIL import Image, ImageFilter, ImageDraw, ImageFont
 import fitz  # PyMuPDF
+from docx import Document
+from docx.shared import Pt, Inches, RGBColor, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -126,7 +129,7 @@ HTML = r'''<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PDF Blur + Watermark</title>
+<title>PDF Tools</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -135,21 +138,36 @@ body {
   height: 100vh; display: flex; flex-direction: column;
 }
 .header {
-  background: #15151e; padding: 10px 16px;
+  background: #15151e;
   border-bottom: 1px solid #2a2a3a;
-  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
 }
-.header h1 { font-size: 16px; white-space: nowrap; }
-.header h1 span { color: #6c5ce7; }
-.actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-.actions button, .actions label {
+.tab-bar {
+  display: flex; border-bottom: 1px solid #2a2a3a;
+}
+.tab-bar .tab {
+  padding: 8px 18px; font-size: 13px; cursor: pointer;
+  color: #8888a0; border-bottom: 2px solid transparent;
+  transition: all 0.15s; user-select: none;
+}
+.tab-bar .tab:hover { color: #e0e0f0; }
+.tab-bar .tab.active {
+  color: #6c5ce7; border-bottom-color: #6c5ce7;
+}
+.toolbar {
+  padding: 8px 16px; display: flex; align-items: center;
+  justify-content: space-between; gap: 10px; flex-wrap: wrap;
+}
+.toolbar-left { display: flex; align-items: center; gap: 6px; }
+.toolbar-right { display: flex; align-items: center; gap: 6px; }
+
+.btn, .toolbar-right button, .toolbar-right label {
   padding: 6px 12px; border-radius: 5px; border: 1px solid #2a2a3a;
   background: #1c1c2a; color: #e0e0f0; cursor: pointer; font-size: 12px;
 }
-.actions button:hover, .actions label:hover { border-color: #6c5ce7; }
-.actions button.primary { background: #6c5ce7; border-color: #6c5ce7; color: #fff; }
-.actions button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
-.actions input[type=file] { display: none; }
+.toolbar-right button:hover, .toolbar-right label:hover { border-color: #6c5ce7; }
+.toolbar-right button.primary { background: #6c5ce7; border-color: #6c5ce7; color: #fff; }
+.toolbar-right button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+.toolbar-right input[type=file] { display: none; }
 
 .main { flex: 1; display: flex; overflow: hidden; }
 .canvas-panel {
@@ -213,13 +231,23 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 <body>
 
 <div class="header">
-  <h1>🔒 <span>PDF Blur + Watermark</span></h1>
-  <div class="actions">
-    <label for="fileInput">📁 Open PDF</label>
-    <input type="file" id="fileInput" accept=".pdf">
-    <button onclick="processPDF()" class="primary" id="processBtn" disabled>⚡ Process</button>
-    <button onclick="analyzePDF()" id="analyzeBtn" disabled>🔍 Analyze</button>
-    <button onclick="downloadPDF()" id="downloadBtn" disabled>⬇ Download</button>
+  <div class="tab-bar">
+    <div class="tab active" onclick="switchTab('blur')" id="tabBlur">🔒 Blur + Watermark</div>
+    <div class="tab" onclick="switchTab('word')" id="tabWord">📄 PDF → Word</div>
+  </div>
+  <div class="toolbar">
+    <div class="toolbar-left">
+      <label for="fileInput" class="btn">📁 Open PDF</label>
+      <input type="file" id="fileInput" accept=".pdf">
+    </div>
+    <div class="toolbar-right" id="toolbarBlur">
+      <button onclick="analyzePDF()" id="analyzeBtn" disabled>🔍 Analyze</button>
+      <button onclick="processPDF()" class="primary" id="processBtn" disabled>⚡ Process</button>
+      <button onclick="downloadPDF()" id="downloadBtn" disabled>⬇ Download</button>
+    </div>
+    <div class="toolbar-right" id="toolbarWord" style="display:none">
+      <button onclick="convertToWord()" class="primary" id="convertBtn" disabled>📄 Convert to Word</button>
+    </div>
   </div>
 </div>
 
@@ -233,28 +261,29 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
   </div>
 
   <div class="sidebar" id="sidebar" style="display:none">
-    <!-- Pages -->
-    <div class="section">
+    <!-- Pages (shown in both modes) -->
+    <div class="section" id="pagesSection">
       <h3>📄 Pages</h3>
       <div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:4px" id="pageThumbs"></div>
     </div>
 
-    <!-- Blur -->
-    <div class="section">
-      <h3>🔍 Blur</h3>
-      <p style="font-size:11px;color:#666;margin-bottom:4px">Drag on the image to add regions</p>
-      <div style="margin-bottom:4px">
-        <div class="range-label"><span>Intensity</span><span id="blurVal">25</span></div>
-        <input type="range" id="blurIntensity" min="5" max="50" value="25">
+    <!-- Blur controls (shown in blur mode) -->
+    <div id="sidebarBlur">
+      <div class="section">
+        <h3>🔍 Blur</h3>
+        <p style="font-size:11px;color:#666;margin-bottom:4px">Drag on the image to add regions</p>
+        <div style="margin-bottom:4px">
+          <div class="range-label"><span>Intensity</span><span id="blurVal">25</span></div>
+          <input type="range" id="blurIntensity" min="5" max="50" value="25">
+        </div>
+        <div class="region-list" id="regionList">
+          <div style="color:#555;font-size:11px;text-align:center;padding:10px">No regions yet</div>
+        </div>
       </div>
-      <div class="region-list" id="regionList">
-        <div style="color:#555;font-size:11px;text-align:center;padding:10px">No regions yet</div>
-      </div>
-    </div>
 
-    <!-- Watermark -->
-    <div class="section">
-      <h3>💧 Watermark <span onclick="clearWatermark()" style="color:#fd79a8;cursor:pointer;font-size:12px;float:right">✖ Clear</span></h3>
+      <!-- Watermark -->
+      <div class="section">
+        <h3>💧 Watermark <span onclick="clearWatermark()" style="color:#fd79a8;cursor:pointer;font-size:12px;float:right">✖ Clear</span></h3>
       <div class="wm-field">
         <label>Text</label>
         <input type="text" id="wmText" value="ESGov">
@@ -290,6 +319,25 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
         </div>
       </div>
     </div>
+
+    <!-- PDF → Word controls (shown in word mode) -->
+    <div id="sidebarWord" style="display:none">
+      <div class="section">
+        <h3>📄 PDF → Word</h3>
+        <p style="font-size:12px;color:#aaa;margin-top:4px;line-height:1.5">
+          Convert your PDF into an editable Word document (.docx).
+        </p>
+        <p style="font-size:12px;color:#888;margin-top:8px;line-height:1.5">
+          ✅ Text content preserved with original fonts, sizes, bold/italic<br>
+          ✅ Multi-column layout detection<br>
+          ✅ Image extraction (where possible)<br>
+          ✅ Page size maintained
+        </p>
+        <p style="font-size:11px;color:#666;margin-top:8px;font-style:italic">
+          Complex layouts (tables, overlapping elements) may have variations.
+        </p>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -316,6 +364,7 @@ document.getElementById('fileInput').addEventListener('change', async e => {
     document.getElementById('sidebar').style.display = 'flex';
     document.getElementById('processBtn').disabled = false;
     document.getElementById('analyzeBtn').disabled = false;
+    document.getElementById('convertBtn').disabled = false;
     renderThumbs(); renderPage(0);
     status(d.pages.length + ' pages loaded');
     toast('PDF loaded: ' + f.name);
@@ -572,11 +621,328 @@ function toast(msg, err) {
   el._timer = setTimeout(() => el.style.display = 'none', 2500);
 }
 function status(msg) { document.getElementById('statusText').textContent = msg; }
+
+// Tab switching
+let activeTab = 'blur';
+function switchTab(tab) {
+  activeTab = tab;
+  document.getElementById('tabBlur').className = 'tab' + (tab === 'blur' ? ' active' : '');
+  document.getElementById('tabWord').className = 'tab' + (tab === 'word' ? ' active' : '');
+  document.getElementById('toolbarBlur').style.display = tab === 'blur' ? '' : 'none';
+  document.getElementById('toolbarWord').style.display = tab === 'word' ? '' : 'none';
+  document.getElementById('sidebarBlur').style.display = tab === 'blur' ? '' : 'none';
+  document.getElementById('sidebarWord').style.display = tab === 'word' ? '' : 'none';
+  // Show/hide overlay interactivity
+  overlayCanvas.style.cursor = tab === 'blur' ? 'crosshair' : 'default';
+  overlayCanvas.style.opacity = tab === 'blur' ? '0.4' : '0';
+}
+
+// PDF → Word conversion
+async function convertToWord() {
+  const btn = document.getElementById('convertBtn');
+  btn.disabled = true; btn.textContent = '⏳ Converting...';
+  try {
+    const r = await fetch('/to-word', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({session_id: state.sessionId})
+    });
+    if (!r.ok) {
+      const d = await r.json();
+      throw new Error(d.error || 'Conversion failed');
+    }
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'converted.docx';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('✅ Word document downloaded!');
+  } catch(e) { toast('Error: '+e.message, true); }
+  finally { btn.disabled = false; btn.textContent = '📄 Convert to Word'; }
+}
+
 window.addEventListener('resize', () => { if (state.pages.length) renderPage(state.currentPage); });
 </script>
 </body>
 </html>
 '''
+
+
+# ══════════════════════════════════════════════════════════════
+# PDF → Word conversion
+# ══════════════════════════════════════════════════════════════
+
+def pdf_to_word(pdf_path, output_path):
+    """Convert PDF to an editable Word document, preserving layout & formatting."""
+    from collections import defaultdict
+
+    doc = Document()
+
+    # Set default font
+    style = doc.styles['Normal']
+    style.font.name = 'Arial'
+    style.font.size = Pt(11)
+
+    pdf = fitz.open(pdf_path)
+
+    for page_num in range(len(pdf)):
+        page = pdf.load_page(page_num)
+
+        # --- Page setup ---
+        rect = page.rect
+        if page_num > 0:
+            doc.add_section()
+        section = doc.sections[-1]
+        section.page_width = Pt(rect.width)
+        section.page_height = Pt(rect.height)
+        section.top_margin = Pt(rect.y0) if rect.y0 > 0 else Cm(1.5)
+        section.bottom_margin = Cm(1.5)
+        section.left_margin = Pt(rect.x0) if rect.x0 > 0 else Cm(1.5)
+        section.right_margin = Cm(1.5)
+
+        # --- Extract images ---
+        image_list = []
+        try:
+            for img_index in range(len(page.get_images())):
+                xref = page.get_images()[img_index][0]
+                base_image = pdf.extract_image(xref)
+                img_data = base_image["image"]
+                img_ext = base_image["ext"]
+                # Save image temporarily
+                img_path = os.path.join(os.path.dirname(output_path), f'_page{page_num}_img{img_index}.{img_ext}')
+                with open(img_path, 'wb') as f:
+                    f.write(img_data)
+                # Find where this image appears on the page
+                for b in page.get_image_bbox(xref):
+                    image_list.append({
+                        'path': img_path,
+                        'bbox': b  # [x0, y0, x1, y1]
+                    })
+                    break
+        except:
+            pass
+
+        # --- Extract text blocks with formatting ---
+        text_dict = page.get_text("dict")
+
+        # Collect all spans with position info
+        spans = []
+        for block in text_dict.get("blocks", []):
+            if block["type"] == 0:  # text block
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        bbox = span["bbox"]
+                        spans.append({
+                            'text': span["text"],
+                            'x0': bbox[0], 'y0': bbox[1],
+                            'x1': bbox[2], 'y1': bbox[3],
+                            'font': span["font"],
+                            'size': span["size"],
+                            'flags': span["flags"],
+                            'color': span.get("color", 0),
+                        })
+
+        if not spans:
+            # Fallback: get plain text
+            text = page.get_text("text")
+            if text.strip():
+                for line in text.split('\n'):
+                    p = doc.add_paragraph()
+                    p.add_run(line.strip() or ' ')
+            continue
+
+        # Sort spans by vertical position, then horizontal
+        spans.sort(key=lambda s: (s['y0'], s['x0']))
+
+        # Group spans into "lines" by close y-position (within 3pt tolerance)
+        lines = []
+        current_line = []
+        current_y = None
+
+        for s in spans:
+            if current_y is None or abs(s['y0'] - current_y) <= 3:
+                current_line.append(s)
+                if current_y is None:
+                    current_y = s['y0']
+                else:
+                    current_y = min(current_y, s['y0'])
+            else:
+                if current_line:
+                    current_line.sort(key=lambda x: x['x0'])
+                    lines.append(current_line)
+                current_line = [s]
+                current_y = s['y0']
+
+        if current_line:
+            current_line.sort(key=lambda x: x['x0'])
+            lines.append(current_line)
+
+        # --- Group lines into columns (if multi-column detected) ---
+        # Simple column detection: check if there's a wide empty vertical strip
+        if lines:
+            all_x0 = [l[0]['x0'] for l in lines if l]
+            if all_x0:
+                min_x_all = min(all_x0)
+                max_x_all = max(l[-1]['x1'] for l in lines if l)
+                page_w = rect.width
+                # If there are two clusters of x0 values with a large gap, it's multi-column
+                x0_vals = sorted(set(int(x) for x in all_x0))
+                gaps = [(x0_vals[i+1] - x0_vals[i]) for i in range(len(x0_vals)-1)]
+                big_gaps = [g for g in gaps if g > page_w * 0.1]
+
+                if big_gaps and len(x0_vals) > 2:
+                    # Multi-column — group lines into columns
+                    # Find column boundaries
+                    col_threshold = page_w * 0.1
+                    cols = []
+                    current_col_lines = []
+                    col_right = None
+                    for line in lines:
+                        lx0 = line[0]['x0']
+                        if col_right is None or lx0 - col_right > col_threshold:
+                            if current_col_lines:
+                                cols.append(current_col_lines)
+                            current_col_lines = [line]
+                            col_right = max(s['x1'] for s in line)
+                        else:
+                            current_col_lines.append(line)
+                            col_right = max(col_right, max(s['x1'] for s in line))
+                    if current_col_lines:
+                        cols.append(current_col_lines)
+
+                    # Render columns side by side using a table
+                    if len(cols) > 1:
+                        n_cols = len(cols)
+                        col_widths = []
+                        for c in cols:
+                            c_min_x = min(l[0]['x0'] for l in c if l)
+                            c_max_x = max(l[-1]['x1'] for l in c if l)
+                            col_widths.append(c_max_x - c_min_x)
+                        total_col_w = sum(col_widths)
+                        if total_col_w > 0:
+                            # Normalise widths to percentage
+                            col_pcts = [w / total_col_w for w in col_widths]
+                        else:
+                            col_pcts = [1.0 / n_cols] * n_cols
+
+                        # Create table
+                        max_rows = max(len(c) for c in cols)
+                        table = doc.add_table(rows=max_rows, cols=n_cols)
+                        table.style = 'Table Grid'
+
+                        for ci, col_lines in enumerate(cols):
+                            for ri, line in enumerate(col_lines):
+                                cell = table.cell(ri, ci)
+                                # Clear default paragraph
+                                cell.paragraphs[0].clear()
+                                p = cell.paragraphs[0]
+                                for span in line:
+                                    run = p.add_run(span['text'] + ' ')
+                                    run.font.size = Pt(span['size'])
+                                    try:
+                                        run.font.name = span['font']
+                                    except:
+                                        pass
+                                    if span['flags'] & 2:
+                                        run.font.italic = True
+                                    if span['flags'] & 4:
+                                        run.font.bold = True
+                                    if span.get('color', 0):
+                                        c_val = span['color']
+                                        r = (c_val >> 16) & 0xFF
+                                        g = (c_val >> 8) & 0xFF
+                                        b = c_val & 0xFF
+                                        try:
+                                            run.font.color.rgb = RGBColor(r, g, b)
+                                        except:
+                                            pass
+                        continue  # skip regular paragraph rendering
+
+        # --- Render lines as paragraphs ---
+        for line in lines:
+            if not line:
+                continue
+            p = doc.add_paragraph()
+
+            # Calculate left indent from first span's x position
+            min_x = min(s['x0'] for s in line)
+            # Convert points to inches (1pt = 1/72 in)
+            left_indent_inches = min_x / 72.0
+            if left_indent_inches > 0:
+                p.paragraph_format.left_indent = Inches(left_indent_inches)
+
+            # Calculate line spacing based on font size
+            max_size = max(s['size'] for s in line)
+            p.paragraph_format.space_before = Pt(0)
+            p.paragraph_format.space_after = Pt(max_size * 0.2)
+            p.paragraph_format.line_spacing = Pt(max_size * 1.3)
+
+            # Alignment detection: if text is centred, set center alignment
+            page_center = rect.width / 2
+            if min_x > page_center * 0.4 and min_x < page_center * 0.6:
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+            # Add spans as runs
+            for span in line:
+                run = p.add_run(span['text'])
+                run.font.size = Pt(span['size'])
+                try:
+                    run.font.name = span['font']
+                except:
+                    pass
+                if span['flags'] & 2:
+                    run.font.italic = True
+                if span['flags'] & 4:
+                    run.font.bold = True
+                # Superscript/subscript detection
+                if span['flags'] & 1:
+                    run.font.superscript = True
+
+                # Color
+                color_val = span.get('color', 0)
+                if color_val and color_val != 0:
+                    r = (color_val >> 16) & 0xFF
+                    g = (color_val >> 8) & 0xFF
+                    b = color_val & 0xFF
+                    try:
+                        run.font.color.rgb = RGBColor(r, g, b)
+                    except:
+                        pass
+
+        # --- Insert images at approximate positions ---
+        for img_info in image_list:
+            img_path = img_info['path']
+            bbox = img_info['bbox']
+            try:
+                # Insert image at the approximate location
+                from docx.oxml.ns import qn
+                p = doc.add_paragraph()
+                run = p.add_run()
+                # Position image at the right location using left_indent
+                left_indent = bbox[0] / 72.0
+                if left_indent > 0:
+                    p.paragraph_format.left_indent = Inches(left_indent)
+
+                inline_shape = run.add_picture(img_path,
+                    width=Inches((bbox[2] - bbox[0]) / 72.0))
+            except:
+                pass
+
+        # Clean up temp image files
+        for img_info in image_list:
+            try:
+                os.remove(img_info['path'])
+            except:
+                pass
+
+    pdf.close()
+
+    # Clean up empty paragraphs at end
+    for p in doc.paragraphs:
+        if not p.text.strip() and not p.runs:
+            p._element.getparent().remove(p._element)
+
+    doc.save(output_path)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -610,7 +976,6 @@ def upload():
         })
     # Save meta
     with open(paths['meta'], 'w') as f:
-        import json as _json
         _json.dump({'original_name': file.filename}, f)
 
     # Save originals
@@ -740,7 +1105,6 @@ def download():
     # Get original filename for download name
     orig_name = 'processed_output.pdf'
     try:
-        import json as _json
         with open(paths['meta']) as f:
             meta = _json.load(f)
             orig_name = meta.get('original_name', 'processed_output.pdf')
@@ -756,6 +1120,40 @@ def download():
     return send_file(output, as_attachment=True,
                      download_name=orig_name,
                      mimetype='application/pdf')
+
+
+@app.route('/to-word', methods=['POST'])
+def to_word():
+    """Convert uploaded PDF to editable Word document."""
+    data = request.json
+    sid = data.get('session_id')
+    paths = get_session_paths(sid)
+    if not os.path.exists(paths['pdf']):
+        return jsonify({'error': 'Session not found'}), 404
+
+    # Get original filename for download name
+    orig_name = 'converted.docx'
+    try:
+        with open(paths['meta']) as f:
+            meta = _json.load(f)
+            orig_name = meta.get('original_name', 'document.docx')
+            if orig_name.lower().endswith('.pdf'):
+                orig_name = orig_name[:-4] + '.docx'
+            else:
+                orig_name = orig_name + '.docx'
+    except:
+        pass
+
+    try:
+        output_path = os.path.join(paths['processed_dir'], 'converted.docx')
+        pdf_to_word(paths['pdf'], output_path)
+        if not os.path.exists(output_path):
+            return jsonify({'error': 'Conversion failed - no output file'}), 500
+        return send_file(output_path, as_attachment=True,
+                         download_name=orig_name,
+                         mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+    except Exception as e:
+        return jsonify({'error': f'Conversion error: {str(e)}'}), 500
 
 
 if __name__ == '__main__':
