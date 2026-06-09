@@ -812,51 +812,54 @@ def pdf_to_word(pdf_path, output_path):
 
                     # Render columns side by side using a table
                     if len(cols) > 1:
-                        n_cols = len(cols)
-                        col_widths = []
-                        for c in cols:
-                            c_min_x = min(l[0]['x0'] for l in c if l)
-                            c_max_x = max(l[-1]['x1'] for l in c if l)
-                            col_widths.append(c_max_x - c_min_x)
-                        total_col_w = sum(col_widths)
-                        if total_col_w > 0:
-                            # Normalise widths to percentage
-                            col_pcts = [w / total_col_w for w in col_widths]
+                        # Filter out columns with only 1 line (likely a title, not a real column)
+                        cols = [c for c in cols if len(c) >= 2]
+                        if len(cols) <= 1:
+                            pass  # fall through to paragraph rendering
                         else:
-                            col_pcts = [1.0 / n_cols] * n_cols
+                            n_cols = len(cols)
+                            col_widths = []
+                            for c in cols:
+                                c_min_x = min(l[0]['x0'] for l in c if l)
+                                c_max_x = max(l[-1]['x1'] for l in c if l)
+                                col_widths.append(c_max_x - c_min_x)
+                            total_col_w = sum(col_widths)
+                            if total_col_w > 0:
+                                col_pcts = [w / total_col_w for w in col_widths]
+                            else:
+                                col_pcts = [1.0 / n_cols] * n_cols
 
-                        # Create table
-                        max_rows = max(len(c) for c in cols)
-                        table = doc.add_table(rows=max_rows, cols=n_cols)
-                        table.style = 'Table Grid'
+                            # Create table
+                            max_rows = max(len(c) for c in cols)
+                            table = doc.add_table(rows=max_rows, cols=n_cols)
+                            table.style = 'Table Grid'
 
-                        for ci, col_lines in enumerate(cols):
-                            for ri, line in enumerate(col_lines):
-                                cell = table.cell(ri, ci)
-                                # Clear default paragraph
-                                cell.paragraphs[0].clear()
-                                p = cell.paragraphs[0]
-                                for span in line:
-                                    run = p.add_run(span['text'] + ' ')
-                                    run.font.size = Pt(span['size'])
-                                    try:
-                                        run.font.name = span['font']
-                                    except:
-                                        pass
-                                    if span['flags'] & 2:
-                                        run.font.italic = True
-                                    if span['flags'] & 4:
-                                        run.font.bold = True
-                                    if span.get('color', 0):
-                                        c_val = span['color']
-                                        r = (c_val >> 16) & 0xFF
-                                        g = (c_val >> 8) & 0xFF
-                                        b = c_val & 0xFF
+                            for ci, col_lines in enumerate(cols):
+                                for ri, line in enumerate(col_lines):
+                                    cell = table.cell(ri, ci)
+                                    cell.paragraphs[0].clear()
+                                    p = cell.paragraphs[0]
+                                    for span in line:
+                                        run = p.add_run(span['text'] + ' ')
+                                        run.font.size = Pt(span['size'])
                                         try:
-                                            run.font.color.rgb = RGBColor(r, g, b)
+                                            run.font.name = span['font']
                                         except:
                                             pass
-                        continue  # skip regular paragraph rendering
+                                        if span['flags'] & 2:
+                                            run.font.italic = True
+                                        if span['flags'] & 4:
+                                            run.font.bold = True
+                                        if span.get('color', 0):
+                                            c_val = span['color']
+                                            r = (c_val >> 16) & 0xFF
+                                            g = (c_val >> 8) & 0xFF
+                                            b = c_val & 0xFF
+                                            try:
+                                                run.font.color.rgb = RGBColor(r, g, b)
+                                            except:
+                                                pass
+                            continue  # skip regular paragraph rendering
 
         # --- Render lines as paragraphs ---
         for line in lines:
