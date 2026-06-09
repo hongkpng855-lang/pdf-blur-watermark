@@ -251,6 +251,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
       <button onclick="convertToWord()" class="primary" id="convertBtn" disabled>📄 Download Word</button>
     </div>
     <div class="toolbar-right" id="toolbarForm" style="display:none">
+      <button onclick="downloadBlankForm()">📄 Blank Form</button>
       <button onclick="previewForm()" id="formPreviewBtn">👁 Preview</button>
       <button onclick="downloadForm()" class="primary" id="formDlBtn" disabled>⬇ Download Fillable PDF</button>
     </div>
@@ -349,7 +350,8 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
       </div>
       <div class="section">
         <h3>⬇ Download</h3>
-        <button onclick="downloadForm()" class="btn primary" style="width:100%" id="formDlBtn2" disabled>📄 Download Fillable PDF</button>
+        <button onclick="downloadBlankForm()" class="btn" style="width:100%;margin-bottom:4px">📄 Blank Form Template</button>
+        <button onclick="downloadForm()" class="btn primary" style="width:100%" id="formDlBtn2" disabled>⬇ Download Fillable PDF</button>
       </div>
     </div>
   </div>
@@ -844,8 +846,23 @@ async function downloadForm() {
   } catch(e) { toast('Error: '+e.message, true); }
   finally {
     btn.disabled = false; btn.textContent = '⬇ Download Fillable PDF';
-    if (btn2) { btn2.disabled = false; btn2.textContent = '📄 Download Fillable PDF'; }
+    if (btn2) { btn2.disabled = false; btn2.textContent = '⬇ Download Fillable PDF'; }
   }
+}
+
+// Download pre-built blank form template
+async function downloadBlankForm() {
+  try {
+    const r = await fetch('/generate-form', { method:'POST' });
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'Download failed'); }
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'INSTRUMENT_OF_TRANSFER_Fillable.pdf';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('✅ Blank form downloaded! Fill in with any PDF reader.');
+  } catch(e) { toast('Error: '+e.message, true); }
 }
 
 window.addEventListener('resize', () => { if (state.pages.length) renderPage(state.currentPage); });
@@ -1240,6 +1257,25 @@ def download_form():
                          mimetype='application/pdf')
     except Exception as e:
         return jsonify({'error': f'Form error: {str(e)}'}), 500
+
+
+@app.route('/generate-form', methods=['POST'])
+def generate_form():
+    """Generate a clean, fillable Instrument of Transfer form PDF."""
+    # Import from project directory
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from generate_form import generate_instrument_of_transfer
+    
+    output_path = os.path.join(UPLOAD_FOLDER, 'instrument_of_transfer_fillable.pdf')
+    generate_instrument_of_transfer(output_path)
+    
+    if not os.path.exists(output_path):
+        return jsonify({'error': 'Form generation failed'}), 500
+    
+    return send_file(output_path, as_attachment=True,
+                     download_name='INSTRUMENT_OF_TRANSFER_Fillable.pdf',
+                     mimetype='application/pdf')
 
 
 if __name__ == '__main__':
