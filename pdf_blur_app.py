@@ -638,9 +638,9 @@ def download():
             meta = _json.load(f)
             orig_name = meta.get('original_name', 'processed_output.pdf')
             if orig_name.lower().endswith('.pdf'):
-                orig_name = orig_name[:-4] + '_Watermark.pdf'
+                orig_name = orig_name[:-4] + '_blur_watermark.pdf'
             else:
-                orig_name = orig_name + '_Watermark.pdf'
+                orig_name = orig_name + '_blur_watermark.pdf'
     except:
         pass
 
