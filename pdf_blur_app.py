@@ -232,8 +232,9 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 
 <div class="header">
   <div class="tab-bar">
-    <div class="tab active" onclick="switchTab('blur')" id="tabBlur">🔒 Blur + Watermark</div>
-    <div class="tab" onclick="switchTab('word')" id="tabWord">📄 PDF → Word</div>
+    <div class="tab active" onclick="switchTab('blur')" id="tabBlur">🔒 Blur</div>
+    <div class="tab" onclick="switchTab('word')" id="tabWord">📄 Word</div>
+    <div class="tab" onclick="switchTab('form')" id="tabForm">📝 Form</div>
   </div>
   <div class="toolbar">
     <div class="toolbar-left">
@@ -246,7 +247,12 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
       <button onclick="downloadPDF()" id="downloadBtn" disabled>⬇ Download</button>
     </div>
     <div class="toolbar-right" id="toolbarWord" style="display:none">
-      <button onclick="convertToWord()" class="primary" id="convertBtn" disabled>📄 Convert to Word</button>
+      <button onclick="previewPage()" id="previewBtn">👁 Preview</button>
+      <button onclick="convertToWord()" class="primary" id="convertBtn" disabled>📄 Download Word</button>
+    </div>
+    <div class="toolbar-right" id="toolbarForm" style="display:none">
+      <button onclick="previewForm()" id="formPreviewBtn">👁 Preview</button>
+      <button onclick="downloadForm()" class="primary" id="formDlBtn" disabled>⬇ Download Fillable PDF</button>
     </div>
   </div>
 </div>
@@ -320,22 +326,30 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
       </div>
     </div>
 
-    <!-- PDF → Word controls (shown in word mode) -->
+    <!-- PDF → Word controls -->
     <div id="sidebarWord" style="display:none">
       <div class="section">
-        <h3>📄 PDF → Word</h3>
+        <h3>📄 Word</h3>
         <p style="font-size:12px;color:#aaa;margin-top:4px;line-height:1.5">
-          Convert your PDF into an editable Word document (.docx).
+          Convert PDF to editable Word document.
         </p>
-        <p style="font-size:12px;color:#888;margin-top:8px;line-height:1.5">
-          ✅ Text content preserved with original fonts, sizes, bold/italic<br>
-          ✅ Multi-column layout detection<br>
-          ✅ Image extraction (where possible)<br>
-          ✅ Page size maintained
-        </p>
-        <p style="font-size:11px;color:#666;margin-top:8px;font-style:italic">
-          Complex layouts (tables, overlapping elements) may have variations.
-        </p>
+        <button onclick="convertToWord()" class="btn primary" style="width:100%;margin-top:8px" id="convertBtn2" disabled>📄 Download Word</button>
+      </div>
+    </div>
+
+    <!-- Fillable Form controls -->
+    <div id="sidebarForm" style="display:none">
+      <div class="section">
+        <h3>📝 Form Fields</h3>
+        <p style="font-size:11px;color:#888;margin-bottom:6px">Click on the document image to place a fillable text field.</p>
+        <button onclick="addFormField()" class="btn" style="width:100%;margin-bottom:6px">➕ Add Field</button>
+        <div class="region-list" id="formFieldList" style="max-height:300px">
+          <div style="color:#555;font-size:11px;text-align:center;padding:10px">No fields yet. Click "Add Field" then click the document.</div>
+        </div>
+      </div>
+      <div class="section">
+        <h3>⬇ Download</h3>
+        <button onclick="downloadForm()" class="btn primary" style="width:100%" id="formDlBtn2" disabled>📄 Download Fillable PDF</button>
       </div>
     </div>
   </div>
@@ -365,6 +379,9 @@ document.getElementById('fileInput').addEventListener('change', async e => {
     document.getElementById('processBtn').disabled = false;
     document.getElementById('analyzeBtn').disabled = false;
     document.getElementById('convertBtn').disabled = false;
+    document.getElementById('convertBtn2').disabled = false;
+    document.getElementById('formDlBtn').disabled = false;
+    document.getElementById('formDlBtn2').disabled = false;
     renderThumbs(); renderPage(0);
     status(d.pages.length + ' pages loaded');
     toast('PDF loaded: ' + f.name);
@@ -628,37 +645,207 @@ function switchTab(tab) {
   activeTab = tab;
   document.getElementById('tabBlur').className = 'tab' + (tab === 'blur' ? ' active' : '');
   document.getElementById('tabWord').className = 'tab' + (tab === 'word' ? ' active' : '');
+  document.getElementById('tabForm').className = 'tab' + (tab === 'form' ? ' active' : '');
   document.getElementById('toolbarBlur').style.display = tab === 'blur' ? '' : 'none';
   document.getElementById('toolbarWord').style.display = tab === 'word' ? '' : 'none';
+  document.getElementById('toolbarForm').style.display = tab === 'form' ? '' : 'none';
   document.getElementById('sidebarBlur').style.display = tab === 'blur' ? '' : 'none';
   document.getElementById('sidebarWord').style.display = tab === 'word' ? '' : 'none';
+  document.getElementById('sidebarForm').style.display = tab === 'form' ? '' : 'none';
   // Show/hide overlay interactivity
-  overlayCanvas.style.cursor = tab === 'blur' ? 'crosshair' : 'default';
-  overlayCanvas.style.opacity = tab === 'blur' ? '0.4' : '0';
+  overlayCanvas.style.cursor = (tab === 'blur' || tab === 'form') ? 'crosshair' : 'default';
+  overlayCanvas.style.opacity = (tab === 'blur' || tab === 'form') ? '0.4' : '0';
+  if (tab === 'form' && state.pages.length) redrawFormFields();
 }
 
 // PDF → Word conversion
 async function convertToWord() {
   const btn = document.getElementById('convertBtn');
-  btn.disabled = true; btn.textContent = '⏳ Converting...';
+  const btn2 = document.getElementById('convertBtn2');
+  btn.disabled = true; btn.textContent = '⏳...';
+  if (btn2) { btn2.disabled = true; btn2.textContent = '⏳...'; }
   try {
     const r = await fetch('/to-word', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({session_id: state.sessionId})
     });
-    if (!r.ok) {
-      const d = await r.json();
-      throw new Error(d.error || 'Conversion failed');
-    }
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'Conversion failed'); }
     const blob = await r.blob();
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = 'converted.docx';
     a.click();
     URL.revokeObjectURL(a.href);
-    toast('✅ Word document downloaded!');
+    toast('✅ Word downloaded!');
   } catch(e) { toast('Error: '+e.message, true); }
-  finally { btn.disabled = false; btn.textContent = '📄 Convert to Word'; }
+  finally {
+    btn.disabled = false; btn.textContent = '📄 Download Word';
+    if (btn2) { btn2.disabled = false; btn2.textContent = '📄 Download Word'; }
+  }
+}
+
+// 👁 Preview — show the current page in the canvas (reuse renderPage)
+function previewPage() {
+  if (!state.pages.length) return;
+  renderPage(state.currentPage);
+  toast('📄 Preview: Page ' + (state.currentPage+1));
+}
+
+// ═══════════════════════════════════════
+// 📝 Fillable Form
+// ═══════════════════════════════════════
+let formFields = {};  // { pageIndex: [{id, x, y, w, h, label, value}, ...] }
+let fieldIdCounter = 0;
+let addingField = false;
+
+function addFormField() {
+  if (!state.pages.length) return;
+  addingField = !addingField;
+  overlayCanvas.style.cursor = addingField ? 'copy' : 'crosshair';
+  toast(addingField ? 'Click on the document to place a field' : 'Add field cancelled');
+}
+
+// Override overlay mousedown to handle form field placement
+const origMouseDown = overlayCanvas.onmousedown;
+overlayCanvas.addEventListener('mousedown', function(e) {
+  if (activeTab !== 'form') return;
+  if (addingField) {
+    const r = overlayCanvas.getBoundingClientRect(), s = state.scale;
+    const cx = (e.clientX - r.left) / s, cy = (e.clientY - r.top) / s;
+    const pi = state.currentPage;
+    if (!formFields[pi]) formFields[pi] = [];
+    const fw = 120, fh = 20;
+    formFields[pi].push({
+      id: ++fieldIdCounter,
+      x: Math.round(cx - fw/2), y: Math.round(cy - fh/2),
+      w: fw, h: fh,
+      label: 'Field ' + fieldIdCounter,
+      value: ''
+    });
+    redrawFormFields();
+    updateFormFieldList();
+    addingField = false;
+    overlayCanvas.style.cursor = 'crosshair';
+    toast('✅ Field added. Drag corners to resize.');
+    return;
+  }
+  // Check if clicking on existing field corner to resize
+});
+
+function redrawFormFields() {
+  const ctx = overlayCanvas.getContext('2d');
+  const s = state.scale;
+  ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+  const fs = formFields[state.currentPage] || [];
+  fs.forEach((f, i) => {
+    // Draw field box
+    ctx.fillStyle = 'rgba(108,92,231,0.08)';
+    ctx.fillRect(f.x, f.y, f.w, f.h);
+    ctx.strokeStyle = '#6c5ce7';
+    ctx.lineWidth = 1.5/s;
+    ctx.setLineDash([4/s, 2/s]);
+    ctx.strokeRect(f.x, f.y, f.w, f.h);
+    ctx.setLineDash([]);
+    // Draw label
+    ctx.fillStyle = '#6c5ce7';
+    ctx.font = Math.max(8, 10/s)+'px sans-serif';
+    ctx.fillText(f.label, f.x+2/s, f.y-2/s);
+    // Draw value if exists
+    if (f.value) {
+      ctx.fillStyle = '#e0e0f0';
+      ctx.font = Math.max(9, 11/s)+'px sans-serif';
+      ctx.fillText(f.value, f.x+3/s, f.y+f.h/2+4/s);
+    }
+  });
+}
+
+function updateFormFieldList() {
+  const fs = formFields[state.currentPage] || [];
+  const el = document.getElementById('formFieldList');
+  if (!fs.length) {
+    el.innerHTML = '<div style="color:#555;font-size:11px;text-align:center;padding:10px">No fields yet. Click "Add Field" then click the document.</div>';
+    return;
+  }
+  el.innerHTML = fs.map((f, i) =>
+    '<div class="region-item" onclick="editFieldLabel('+f.id+')">' +
+    '<span class="num">#'+(i+1)+'</span>' +
+    '<span style="flex:1;overflow:hidden;text-overflow:ellipsis">'+(f.label)+'</span>' +
+    '<input id="fld_'+f.id+'" value="'+f.value.replace(/"/g,'&quot;')+'" ' +
+    'style="width:60px;padding:1px 3px;background:#1c1c2a;border:1px solid #2a2a3a;border-radius:2px;color:#e0e0f0;font-size:10px" ' +
+    'onchange="formFieldValueChanged('+f.id+',this.value)" placeholder="value">' +
+    '<span class="del" onclick="delFormField('+f.id+')">\u2716</span></div>'
+  ).join('');
+}
+
+function editFieldLabel(fid) {
+  const f = findField(fid);
+  if (!f) return;
+  const newLabel = prompt('Field label:', f.label);
+  if (newLabel && newLabel.trim()) {
+    f.label = newLabel.trim();
+    redrawFormFields();
+    updateFormFieldList();
+  }
+}
+
+function formFieldValueChanged(fid, val) {
+  const f = findField(fid);
+  if (f) { f.value = val; redrawFormFields(); }
+}
+
+function delFormField(fid) {
+  const pi = state.currentPage;
+  if (formFields[pi]) {
+    formFields[pi] = formFields[pi].filter(f => f.id !== fid);
+    redrawFormFields();
+    updateFormFieldList();
+  }
+}
+
+function findField(fid) {
+  for (const pi in formFields) {
+    for (const f of formFields[pi]) {
+      if (f.id === fid) return f;
+    }
+  }
+  return null;
+}
+
+// Preview form — show filled values on the overlay
+function previewForm() {
+  if (!state.pages.length) return;
+  renderPage(state.currentPage);
+  redrawFormFields();
+  toast('👁 Preview: showing form fields');
+}
+
+// Download fillable PDF
+async function downloadForm() {
+  const btn = document.getElementById('formDlBtn');
+  const btn2 = document.getElementById('formDlBtn2');
+  btn.disabled = true; btn.textContent = '⏳...';
+  if (btn2) { btn2.disabled = true; btn2.textContent = '⏳...'; }
+  try {
+    const r = await fetch('/download-form', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        session_id: state.sessionId,
+        fields: formFields
+      })
+    });
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'Download failed'); }
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'fillable_form.pdf';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('✅ Fillable PDF downloaded!');
+  } catch(e) { toast('Error: '+e.message, true); }
+  finally {
+    btn.disabled = false; btn.textContent = '⬇ Download Fillable PDF';
+    if (btn2) { btn2.disabled = false; btn2.textContent = '📄 Download Fillable PDF'; }
+  }
 }
 
 window.addEventListener('resize', () => { if (state.pages.length) renderPage(state.currentPage); });
@@ -980,6 +1167,79 @@ def to_word():
                          mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
     except Exception as e:
         return jsonify({'error': f'Conversion error: {str(e)}'}), 500
+
+
+@app.route('/download-form', methods=['POST'])
+def download_form():
+    """Generate a fillable PDF form with AcroForm fields overlaid on the scanned document."""
+    data = request.json
+    sid = data.get('session_id')
+    fields_data = data.get('fields', {})
+    paths = get_session_paths(sid)
+    if not os.path.exists(paths['pdf']):
+        return jsonify({'error': 'Session not found'}), 404
+
+    try:
+        # Open the original PDF to get page dimensions
+        src_pdf = fitz.open(paths['pdf'])
+        num_pages = len(src_pdf)
+
+        # Create output PDF
+        out_pdf = fitz.open()
+
+        for page_num in range(num_pages):
+            src_page = src_pdf.load_page(page_num)
+            rect = src_page.rect
+
+            # Render page as image at 2x
+            mat = fitz.Matrix(2.0, 2.0)
+            pix = src_page.get_pixmap(matrix=mat)
+            img_bytes = pix.tobytes("png")
+
+            # Create new page with same dimensions
+            new_page = out_pdf.new_page(width=rect.width, height=rect.height)
+
+            # Insert the rendered page image as background
+            img_rect = fitz.Rect(0, 0, rect.width, rect.height)
+            new_page.insert_image(img_rect, stream=img_bytes)
+
+            # Add AcroForm text fields for this page
+            page_fields = fields_data.get(str(page_num), [])
+            for f in page_fields:
+                widget = fitz.Widget()
+                widget.field_type = fitz.PDF_WIDGET_TYPE_TEXT  # 7
+                widget.field_name = f.get('label', f'field_{f.get("id", 0)}')
+                widget.rect = fitz.Rect(
+                    f['x'], f['y'],
+                    f['x'] + f['w'],
+                    f['y'] + f['h']
+                )
+                widget.text_font = "Helv"
+                widget.text_font_size = 11
+                widget.border_color = (0.42, 0.36, 0.91)  # #6c5ce7
+                widget.fill_color = (1, 1, 1)
+                widget.text_color = (0, 0, 0)
+                widget.border_width = 1
+                if f.get('value'):
+                    widget.field_value = f['value']
+                    widget.text_value = f['value']
+                new_page.add_widget(widget)
+
+        src_pdf.close()
+
+        # Save to temp path
+        output_path = os.path.join(paths['processed_dir'], 'fillable_form.pdf')
+        out_pdf.save(output_path, garbage=4, deflate=True)
+        out_pdf.close()
+
+        if not os.path.exists(output_path):
+            return jsonify({'error': 'Form generation failed'}), 500
+
+        return send_file(output_path, as_attachment=True,
+                         download_name='fillable_form.pdf',
+                         mimetype='application/pdf')
+    except Exception as e:
+        return jsonify({'error': f'Form error: {str(e)}'}), 500
 
 
 if __name__ == '__main__':
