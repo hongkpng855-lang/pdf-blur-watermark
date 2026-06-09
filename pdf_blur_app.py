@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify, send_file
 from PIL import Image, ImageFilter, ImageDraw, ImageFont
 import fitz  # PyMuPDF
 from docx import Document
-from docx.shared import Pt, Inches, RGBColor, Cm
+from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 app = Flask(__name__)
@@ -673,277 +673,80 @@ window.addEventListener('resize', () => { if (state.pages.length) renderPage(sta
 # ══════════════════════════════════════════════════════════════
 
 def pdf_to_word(pdf_path, output_path):
-    """Convert PDF to an editable Word document, preserving layout & formatting."""
-    from collections import defaultdict
+    """Convert PDF to an editable Word document using pdf2docx engine.
+    Falls back to image embedding for scanned/image-based PDFs."""
+    import shutil
 
+    try:
+        # Primary: use pdf2docx for proper PDF→Word conversion
+        from pdf2docx import Converter
+        cv = Converter(pdf_path)
+        cv.convert(output_path, start=0, end=None)
+        cv.close()
+    except Exception as e:
+        # If pdf2docx fails entirely (e.g. encrypted, damaged), fall through
+        pass
+
+    # Check if the output was produced and has content
+    docx_ok = False
+    if os.path.exists(output_path) and os.path.getsize(output_path) > 5000:
+        try:
+            test_doc = Document(output_path)
+            total_text = sum(len(p.text.strip()) for p in test_doc.paragraphs)
+            # Also check tables
+            for t in test_doc.tables:
+                for row in t.rows:
+                    for cell in row.cells:
+                        total_text += len(cell.text.strip())
+            if total_text > 20:
+                docx_ok = True
+                return  # pdf2docx produced good output
+        except:
+            pass
+
+    # Fallback: render PDF pages as images and embed in Word
+    # This preserves the visual layout for scanned/image-based PDFs
     doc = Document()
-
-    # Set default font
-    style = doc.styles['Normal']
-    style.font.name = 'Arial'
-    style.font.size = Pt(11)
-
     pdf = fitz.open(pdf_path)
 
     for page_num in range(len(pdf)):
         page = pdf.load_page(page_num)
-
-        # --- Page setup ---
         rect = page.rect
+
         if page_num > 0:
             doc.add_section()
         section = doc.sections[-1]
         section.page_width = Pt(rect.width)
         section.page_height = Pt(rect.height)
-        section.top_margin = Pt(rect.y0) if rect.y0 > 0 else Cm(1.5)
-        section.bottom_margin = Cm(1.5)
-        section.left_margin = Pt(rect.x0) if rect.x0 > 0 else Cm(1.5)
-        section.right_margin = Cm(1.5)
 
-        # --- Extract images ---
-        image_list = []
-        try:
-            for img_index in range(len(page.get_images())):
-                xref = page.get_images()[img_index][0]
-                base_image = pdf.extract_image(xref)
-                img_data = base_image["image"]
-                img_ext = base_image["ext"]
-                # Save image temporarily
-                img_path = os.path.join(os.path.dirname(output_path), f'_page{page_num}_img{img_index}.{img_ext}')
-                with open(img_path, 'wb') as f:
-                    f.write(img_data)
-                # Find where this image appears on the page
-                for b in page.get_image_bbox(xref):
-                    image_list.append({
-                        'path': img_path,
-                        'bbox': b  # [x0, y0, x1, y1]
-                    })
-                    break
-        except:
-            pass
+        # Render page as image
+        mat = fitz.Matrix(2.0, 2.0)  # 2x for quality
+        pix = page.get_pixmap(matrix=mat)
+        img_bytes = pix.tobytes("png")
 
-        # --- Extract text blocks with formatting ---
-        text_dict = page.get_text("dict")
+        # Save to temp file
+        img_path = os.path.join(os.path.dirname(output_path), f'_page{page_num}.png')
+        with open(img_path, 'wb') as f:
+            f.write(img_bytes)
 
-        # Collect all spans with position info
-        spans = []
-        for block in text_dict.get("blocks", []):
-            if block["type"] == 0:  # text block
-                for line in block.get("lines", []):
-                    for span in line.get("spans", []):
-                        bbox = span["bbox"]
-                        spans.append({
-                            'text': span["text"],
-                            'x0': bbox[0], 'y0': bbox[1],
-                            'x1': bbox[2], 'y1': bbox[3],
-                            'font': span["font"],
-                            'size': span["size"],
-                            'flags': span["flags"],
-                            'color': span.get("color", 0),
-                        })
+        # Add image to Word doc
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run()
+        run.add_picture(img_path, width=Pt(rect.width))
 
-        if not spans:
-            # Fallback: get plain text
-            text = page.get_text("text")
-            if text.strip():
-                for line in text.split('\n'):
-                    p = doc.add_paragraph()
-                    p.add_run(line.strip() or ' ')
-            continue
-
-        # Sort spans by vertical position, then horizontal
-        spans.sort(key=lambda s: (s['y0'], s['x0']))
-
-        # Group spans into "lines" by close y-position (within 3pt tolerance)
-        lines = []
-        current_line = []
-        current_y = None
-
-        for s in spans:
-            if current_y is None or abs(s['y0'] - current_y) <= 3:
-                current_line.append(s)
-                if current_y is None:
-                    current_y = s['y0']
-                else:
-                    current_y = min(current_y, s['y0'])
-            else:
-                if current_line:
-                    current_line.sort(key=lambda x: x['x0'])
-                    lines.append(current_line)
-                current_line = [s]
-                current_y = s['y0']
-
-        if current_line:
-            current_line.sort(key=lambda x: x['x0'])
-            lines.append(current_line)
-
-        # --- Group lines into columns (if multi-column detected) ---
-        # Simple column detection: check if there's a wide empty vertical strip
-        if lines:
-            all_x0 = [l[0]['x0'] for l in lines if l]
-            if all_x0:
-                min_x_all = min(all_x0)
-                max_x_all = max(l[-1]['x1'] for l in lines if l)
-                page_w = rect.width
-                # If there are two clusters of x0 values with a large gap, it's multi-column
-                x0_vals = sorted(set(int(x) for x in all_x0))
-                gaps = [(x0_vals[i+1] - x0_vals[i]) for i in range(len(x0_vals)-1)]
-                big_gaps = [g for g in gaps if g > page_w * 0.1]
-
-                if big_gaps and len(x0_vals) > 2:
-                    # Multi-column — group lines into columns
-                    # Find column boundaries
-                    col_threshold = page_w * 0.1
-                    cols = []
-                    current_col_lines = []
-                    col_right = None
-                    for line in lines:
-                        lx0 = line[0]['x0']
-                        if col_right is None or lx0 - col_right > col_threshold:
-                            if current_col_lines:
-                                cols.append(current_col_lines)
-                            current_col_lines = [line]
-                            col_right = max(s['x1'] for s in line)
-                        else:
-                            current_col_lines.append(line)
-                            col_right = max(col_right, max(s['x1'] for s in line))
-                    if current_col_lines:
-                        cols.append(current_col_lines)
-
-                    # Render columns side by side using a table
-                    if len(cols) > 1:
-                        # Filter out columns with only 1 line (likely a title, not a real column)
-                        cols = [c for c in cols if len(c) >= 2]
-                        if len(cols) <= 1:
-                            pass  # fall through to paragraph rendering
-                        else:
-                            n_cols = len(cols)
-                            col_widths = []
-                            for c in cols:
-                                c_min_x = min(l[0]['x0'] for l in c if l)
-                                c_max_x = max(l[-1]['x1'] for l in c if l)
-                                col_widths.append(c_max_x - c_min_x)
-                            total_col_w = sum(col_widths)
-                            if total_col_w > 0:
-                                col_pcts = [w / total_col_w for w in col_widths]
-                            else:
-                                col_pcts = [1.0 / n_cols] * n_cols
-
-                            # Create table
-                            max_rows = max(len(c) for c in cols)
-                            table = doc.add_table(rows=max_rows, cols=n_cols)
-                            table.style = 'Table Grid'
-
-                            for ci, col_lines in enumerate(cols):
-                                for ri, line in enumerate(col_lines):
-                                    cell = table.cell(ri, ci)
-                                    cell.paragraphs[0].clear()
-                                    p = cell.paragraphs[0]
-                                    for span in line:
-                                        run = p.add_run(span['text'] + ' ')
-                                        run.font.size = Pt(span['size'])
-                                        try:
-                                            run.font.name = span['font']
-                                        except:
-                                            pass
-                                        if span['flags'] & 2:
-                                            run.font.italic = True
-                                        if span['flags'] & 4:
-                                            run.font.bold = True
-                                        if span.get('color', 0):
-                                            c_val = span['color']
-                                            r = (c_val >> 16) & 0xFF
-                                            g = (c_val >> 8) & 0xFF
-                                            b = c_val & 0xFF
-                                            try:
-                                                run.font.color.rgb = RGBColor(r, g, b)
-                                            except:
-                                                pass
-                            continue  # skip regular paragraph rendering
-
-        # --- Render lines as paragraphs ---
-        for line in lines:
-            if not line:
-                continue
-            p = doc.add_paragraph()
-
-            # Calculate left indent from first span's x position
-            min_x = min(s['x0'] for s in line)
-            # Convert points to inches (1pt = 1/72 in)
-            left_indent_inches = min_x / 72.0
-            if left_indent_inches > 0:
-                p.paragraph_format.left_indent = Inches(left_indent_inches)
-
-            # Calculate line spacing based on font size
-            max_size = max(s['size'] for s in line)
-            p.paragraph_format.space_before = Pt(0)
-            p.paragraph_format.space_after = Pt(max_size * 0.2)
-            p.paragraph_format.line_spacing = Pt(max_size * 1.3)
-
-            # Alignment detection: if text is centred, set center alignment
-            page_center = rect.width / 2
-            if min_x > page_center * 0.4 and min_x < page_center * 0.6:
-                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-            # Add spans as runs
-            for span in line:
-                run = p.add_run(span['text'])
-                run.font.size = Pt(span['size'])
-                try:
-                    run.font.name = span['font']
-                except:
-                    pass
-                if span['flags'] & 2:
-                    run.font.italic = True
-                if span['flags'] & 4:
-                    run.font.bold = True
-                # Superscript/subscript detection
-                if span['flags'] & 1:
-                    run.font.superscript = True
-
-                # Color
-                color_val = span.get('color', 0)
-                if color_val and color_val != 0:
-                    r = (color_val >> 16) & 0xFF
-                    g = (color_val >> 8) & 0xFF
-                    b = color_val & 0xFF
-                    try:
-                        run.font.color.rgb = RGBColor(r, g, b)
-                    except:
-                        pass
-
-        # --- Insert images at approximate positions ---
-        for img_info in image_list:
-            img_path = img_info['path']
-            bbox = img_info['bbox']
-            try:
-                # Insert image at the approximate location
-                from docx.oxml.ns import qn
-                p = doc.add_paragraph()
-                run = p.add_run()
-                # Position image at the right location using left_indent
-                left_indent = bbox[0] / 72.0
-                if left_indent > 0:
-                    p.paragraph_format.left_indent = Inches(left_indent)
-
-                inline_shape = run.add_picture(img_path,
-                    width=Inches((bbox[2] - bbox[0]) / 72.0))
-            except:
-                pass
-
-        # Clean up temp image files
-        for img_info in image_list:
-            try:
-                os.remove(img_info['path'])
-            except:
-                pass
+        # Clean up
+        os.remove(img_path)
 
     pdf.close()
 
-    # Clean up empty paragraphs at end
-    for p in doc.paragraphs:
+    # Clean empty paragraphs
+    for p in doc.paragraphs[:]:
         if not p.text.strip() and not p.runs:
-            p._element.getparent().remove(p._element)
+            try:
+                p._element.getparent().remove(p._element)
+            except:
+                pass
 
     doc.save(output_path)
 
