@@ -21,6 +21,9 @@ FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 if not os.path.exists(FONT_PATH):
     FONT_PATH = None
 
+ALLOWED_IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif', '.gif'}
+ALLOWED_IMAGE_MIMES = {'image/jpeg', 'image/png', 'image/webp', 'image/bmp', 'image/tiff', 'image/gif'}
+
 
 def get_session_paths(sid):
     """Get file paths for a session, supporting multi-worker gunicorn."""
@@ -238,8 +241,8 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
   </div>
   <div class="toolbar">
     <div class="toolbar-left">
-      <label for="fileInput" class="btn">📁 Open PDF</label>
-      <input type="file" id="fileInput" accept=".pdf">
+      <label for="fileInput" class="btn">📁 Open File</label>
+      <input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png,.webp,.bmp,.tiff,.tif,.gif">
     </div>
     <div class="toolbar-right" id="toolbarBlur">
       <button onclick="analyzePDF()" id="analyzeBtn" disabled>🔍 Analyze</button>
@@ -264,7 +267,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
       <canvas id="baseCanvas" class="base"></canvas>
       <canvas id="overlayCanvas" class="overlay"></canvas>
     </div>
-    <div class="empty-msg" id="emptyMsg">📄<br>Upload a PDF</div>
+    <div class="empty-msg" id="emptyMsg">📄🖼<br>Upload a PDF or Image</div>
   </div>
 
   <div class="sidebar" id="sidebar" style="display:none">
@@ -357,7 +360,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
   </div>
 </div>
 
-<div class="status-bar"><span id="statusText">Open a PDF to get started</span></div>
+<div class="status-bar"><span id="statusText">Open a PDF or image to get started</span></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -369,24 +372,31 @@ let isDrawing = false, dx = 0, dy = 0;
 
 document.getElementById('fileInput').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
+  const isImg = /\.(jpg|jpeg|png|webp|bmp|tiff?|gif)$/i.test(f.name);
   const fd = new FormData(); fd.append('pdf', f);
   try {
     const r = await fetch('/upload', { method:'POST', body:fd });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error);
     state.sessionId = d.session_id; state.pages = d.pages;
-    state.currentPage = 0; state.regions = {}; detectedBlocks = {};
+    state.currentPage = 0; state.regions = {}; state.isImage = isImg; detectedBlocks = {};
     document.getElementById('emptyMsg').style.display = 'none';
     document.getElementById('sidebar').style.display = 'flex';
     document.getElementById('processBtn').disabled = false;
-    document.getElementById('analyzeBtn').disabled = false;
-    document.getElementById('convertBtn').disabled = false;
-    document.getElementById('convertBtn2').disabled = false;
-    document.getElementById('formDlBtn').disabled = false;
-    document.getElementById('formDlBtn2').disabled = false;
+    // Image mode: disable analyze (PDF only), Word tab, Form tab
+    document.getElementById('analyzeBtn').disabled = isImg;
+    document.getElementById('tabWord').style.opacity = isImg ? '0.3' : '1';
+    document.getElementById('tabWord').style.pointerEvents = isImg ? 'none' : 'auto';
+    document.getElementById('tabForm').style.opacity = isImg ? '0.3' : '1';
+    document.getElementById('tabForm').style.pointerEvents = isImg ? 'none' : 'auto';
+    if (isImg && (activeTab === 'word' || activeTab === 'form')) switchTab('blur');
+    document.getElementById('convertBtn').disabled = isImg;
+    document.getElementById('convertBtn2').disabled = isImg;
+    document.getElementById('formDlBtn').disabled = isImg;
+    document.getElementById('formDlBtn2').disabled = isImg;
     renderThumbs(); renderPage(0);
-    status(d.pages.length + ' pages loaded');
-    toast('PDF loaded: ' + f.name);
+    status(d.pages.length + ' page' + (d.pages.length>1?'s':'') + ' loaded');
+    toast((isImg ? '🖼 Image' : '📄 PDF') + ' loaded: ' + f.name);
   } catch(e) { toast('Error: ' + e.message, true); }
 });
 
@@ -989,12 +999,22 @@ def upload():
     if 'pdf' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
     file = request.files['pdf']
-    if not file.filename.lower().endswith('.pdf'):
-        return jsonify({'error': 'Only PDF files accepted'}), 400
+    ext = os.path.splitext(file.filename)[1].lower()
+    is_image = ext in ALLOWED_IMAGE_EXTS
+
+    if not ext.endswith('.pdf') and not is_image:
+        return jsonify({'error': 'Only PDF and image files accepted'}), 400
+
     session_id = uuid.uuid4().hex[:12]
     paths = get_session_paths(session_id)
     file.save(paths['pdf'])
-    images = pdf_to_images(paths['pdf'])
+
+    if is_image:
+        # Single image — load directly with PIL
+        img = Image.open(paths['pdf']).convert('RGB')
+        images = [img]
+    else:
+        images = pdf_to_images(paths['pdf'])
     pages = []
     for i, img in enumerate(images):
         buf = io.BytesIO()
@@ -1004,9 +1024,9 @@ def upload():
             'dataUrl': f'data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}',
             'w': img.width, 'h': img.height
         })
-    # Save meta
+    # Save meta (include is_image flag for download route)
     with open(paths['meta'], 'w') as f:
-        _json.dump({'original_name': file.filename}, f)
+        _json.dump({'original_name': file.filename, 'is_image': is_image, 'ext': ext if is_image else '.pdf'}, f)
 
     # Save originals
     originals_dir = paths['originals']
@@ -1036,6 +1056,15 @@ def analyze():
     paths = get_session_paths(sid)
     if not os.path.exists(paths['pdf']):
         return jsonify({'error': 'Session not found'}), 404
+
+    # Check if it's a PDF (analyze only works for PDFs)
+    try:
+        with open(paths['meta']) as f:
+            meta = _json.load(f)
+            if meta.get('is_image', False):
+                return jsonify({'error': 'Analyze only works on PDFs, not images'}), 400
+    except:
+        pass
 
     doc = fitz.open(paths['pdf'])
     blocks_per_page = {}
@@ -1132,24 +1161,52 @@ def download():
     if not images:
         return jsonify({'error': 'No images found'}), 404
 
-    # Get original filename for download name
+    # Get original filename and type from meta
     orig_name = 'processed_output.pdf'
+    is_image = False
+    orig_ext = '.pdf'
     try:
         with open(paths['meta']) as f:
             meta = _json.load(f)
+            is_image = meta.get('is_image', False)
+            orig_ext = meta.get('ext', '.pdf')
             orig_name = meta.get('original_name', 'processed_output.pdf')
-            if orig_name.lower().endswith('.pdf'):
-                orig_name = orig_name[:-4] + '_blur_watermark.pdf'
-            else:
-                orig_name = orig_name + '_blur_watermark.pdf'
     except:
         pass
 
-    output = os.path.join(paths['processed_dir'], 'output.pdf')
-    images_to_pdf(images, output)
-    return send_file(output, as_attachment=True,
-                     download_name=orig_name,
-                     mimetype='application/pdf')
+    if is_image and orig_ext in ALLOWED_IMAGE_EXTS:
+        # Output as the original image format
+        output_name = orig_name
+        stem, _ = os.path.splitext(output_name)
+        if not output_name.lower().endswith(tuple(ALLOWED_IMAGE_EXTS)):
+            output_name = stem + orig_ext
+        output = os.path.join(paths['processed_dir'], f'output{orig_ext}')
+        img = images[0]
+        # Normalize ext for PIL save format
+        pil_fmt = {'jpg': 'JPEG', 'jpeg': 'JPEG', 'png': 'PNG', 'webp': 'WebP',
+                   'bmp': 'BMP', 'tiff': 'TIFF', 'tif': 'TIFF', 'gif': 'GIF'}
+        save_fmt = pil_fmt.get(orig_ext.lstrip('.'), 'PNG')
+        img.save(output, save_fmt)
+        mime_type = f'image/{save_fmt.lower()}'
+        if save_fmt == 'JPEG':
+            mime_type = 'image/jpeg'
+        elif save_fmt == 'TIFF':
+            mime_type = 'image/tiff'
+        return send_file(output, as_attachment=True,
+                         download_name=output_name,
+                         mimetype=mime_type)
+    else:
+        # Output as PDF
+        output_name = orig_name
+        if output_name.lower().endswith('.pdf'):
+            output_name = output_name[:-4] + '_blur_watermark.pdf'
+        else:
+            output_name = output_name + '_blur_watermark.pdf'
+        output = os.path.join(paths['processed_dir'], 'output.pdf')
+        images_to_pdf(images, output)
+        return send_file(output, as_attachment=True,
+                         download_name=output_name,
+                         mimetype='application/pdf')
 
 
 @app.route('/to-word', methods=['POST'])
@@ -1160,6 +1217,15 @@ def to_word():
     paths = get_session_paths(sid)
     if not os.path.exists(paths['pdf']):
         return jsonify({'error': 'Session not found'}), 404
+
+    # Only works for PDFs
+    try:
+        with open(paths['meta']) as f:
+            meta = _json.load(f)
+            if meta.get('is_image', False):
+                return jsonify({'error': 'Word conversion only works on PDFs, not images'}), 400
+    except:
+        pass
 
     # Get original filename for download name
     orig_name = 'converted.docx'
@@ -1195,6 +1261,15 @@ def download_form():
     paths = get_session_paths(sid)
     if not os.path.exists(paths['pdf']):
         return jsonify({'error': 'Session not found'}), 404
+
+    # Only works for PDFs
+    try:
+        with open(paths['meta']) as f:
+            meta = _json.load(f)
+            if meta.get('is_image', False):
+                return jsonify({'error': 'Form fill only works on PDFs, not images'}), 400
+    except:
+        pass
 
     try:
         # Open the original PDF to get page dimensions
